@@ -1,0 +1,6 @@
+# dsh-composer-autopair bundle patch。
+# 与 README「安装」一节的手动步骤一致：把插件行插入所属 profile 的 cordis 配置。
+# 声明在 package.json 的 dsh.bundle.patch 里，供 `dsh plugin add` 这类安装器使用。
+- insert:
+    - id: composer-autopair
+      name: dsh-composer-autopair

@@ -1,0 +1,67 @@
+{
+  "name": "dsh-composer-autopair",
+  "version": "0.4.0",
+  "description": "DSH 聊天输入框自动配对：输入左半边自动补右半边、光标停在中间（半角+全角；退格删空对、选中文字包裹、兼容输入法提交与引号嵌套）。Auto-pair brackets and quotes in the DeepSeek Harness chat composer.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "tools/read-report.mjs",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "dsh-web",
+    "dsh-client-plugin",
+    "composer",
+    "lexical",
+    "autopair",
+    "auto-pair",
+    "brackets",
+    "quotes",
+    "输入框",
+    "括号",
+    "引号",
+    "自动配对"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test src/autopair.test.mjs",
+    "deploy": "node deploy.mjs",
+    "report": "node tools/read-report.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xiqingyushan-ovo/dsh-composer-autopair.git"
+  },
+  "homepage": "https://github.com/xiqingyushan-ovo/dsh-composer-autopair#readme",
+  "bugs": {
+    "url": "https://github.com/xiqingyushan-ovo/dsh-composer-autopair/issues"
+  },
+  "author": "ovo (https://github.com/xiqingyushan-ovo)",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  }
+}

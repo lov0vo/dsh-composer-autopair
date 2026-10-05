@@ -1,0 +1,18 @@
+# 依赖与构建产物无关的临时文件
+node_modules/
+*.log
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本插件安装/部署时产生的备份
+*.bak
+*.bak-*
+cordis.patch.yml.bak*
+
+# 本地运行产生的报告
+dsh-composer-autopair-report*.json
