@@ -48,13 +48,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xiqingyushan-ovo/dsh-composer-autopair.git"
+    "url": "git+https://github.com/lov0vo/dsh-composer-autopair.git"
   },
-  "homepage": "https://github.com/xiqingyushan-ovo/dsh-composer-autopair#readme",
+  "homepage": "https://github.com/lov0vo/dsh-composer-autopair#readme",
   "bugs": {
-    "url": "https://github.com/xiqingyushan-ovo/dsh-composer-autopair/issues"
+    "url": "https://github.com/lov0vo/dsh-composer-autopair/issues"
   },
-  "author": "ovo (https://github.com/xiqingyushan-ovo)",
+  "author": "ovo (https://github.com/lov0vo)",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

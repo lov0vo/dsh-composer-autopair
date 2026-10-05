@@ -31,7 +31,7 @@
 插件是一个标准的 DSH 客户端插件包（`dsh.client` + `dsh.bundle.patch`），仓库里已带构建产物 `lib/client.js`。
 
 ```bash
-git clone https://github.com/xiqingyushan-ovo/dsh-composer-autopair
+git clone https://github.com/lov0vo/dsh-composer-autopair
 cd dsh-composer-autopair
 
 node deploy.mjs            # 构建 + 安装 + 启用（热生效）

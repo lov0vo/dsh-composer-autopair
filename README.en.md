@@ -34,7 +34,7 @@ This is a regular DSH client plugin package (`dsh.client` + `dsh.bundle.patch`);
 `lib/client.js` is committed, so no build step is required to use it.
 
 ```bash
-git clone https://github.com/xiqingyushan-ovo/dsh-composer-autopair
+git clone https://github.com/lov0vo/dsh-composer-autopair
 cd dsh-composer-autopair
 
 node deploy.mjs            # build + install + enable (hot-applied)
