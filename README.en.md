@@ -37,7 +37,7 @@ This is a regular DSH client plugin package (`dsh.client` + `dsh.bundle.patch`);
 git clone https://github.com/lov0vo/dsh-composer-autopair
 cd dsh-composer-autopair
 
-node deploy.mjs            # build + install + enable (hot-applied)
+node deploy.mjs            # build + install (mounting route chosen automatically)
 node deploy.mjs --check    # dry run
 node deploy.mjs --remove   # uninstall
 ```
@@ -45,8 +45,19 @@ node deploy.mjs --remove   # uninstall
 `deploy.mjs` does four things:
 
 1. builds `lib/client.js` from `src/autopair.mjs`;
-2. copies the package into `<DSH_HOME>/profiles/desktop/node_modules/dsh-composer-autopair/`;
-3. appends a loader entry to the profile's `cordis.patch.yml` (ASCII markers, idempotent):
+2. copies the package into `<DSH_HOME>/plugins/dsh-composer-autopair/` (a **stable copy**) and into
+   `<DSH_HOME>/profiles/desktop/node_modules/dsh-composer-autopair/`;
+3. registers a `file:` dependency in the profile's `package.json` pointing at that **stable copy**, not at
+   the repository — otherwise moving the repository turns it into a dangling dependency, `pnpm install`
+   prunes the directory, and the plugin silently stops working;
+4. mounts the loader entry, **choosing exactly one route** from what the profile already has:
+
+   | `dsh.profile.bundles` in the profile | What deploy does | Activation |
+   |---|---|---|
+   | already lists this package (installed by dshmarket, or added by hand) | **bundle route**: the package's own `cordis.patch.yml` inserts the entry; deploy only **removes** the managed block from the user patch | needs a DSH restart (the bundle list is read at host startup) |
+   | does not list it | **user-patch route**: deploy appends the managed block to the profile's `cordis.patch.yml` | immediate when the profile declares `patchReload: live` |
+
+   The managed block looks like this:
 
    ```yaml
    - insert:
@@ -54,23 +65,14 @@ node deploy.mjs --remove   # uninstall
          name: dsh-composer-autopair
    ```
 
-4. registers a `file:` dependency in the profile's `package.json`, so a later `pnpm install`
-   does not prune the directory.
+   **Why exactly one route**: inserting both makes the id `composer-autopair` appear **twice**;
+   the "can this composition start?" static check dshmarket runs after installing or updating a plugin
+   reports a duplicate loader entry id and **rolls the whole update back**. (The real loader here is
+   1.0.5, where a duplicate merely means "the later layer wins" — but dshmarket reads the loader version
+   from the profile's `pnpm-lock.yaml`, which does not contain it, so it conservatively treats it as fatal.)
 
 Environment variables: `DSH_HOME` (default `~/.dsh`), `DSH_PROFILE_DIR`
 (default `$DSH_HOME/profiles/desktop`).
-
-**Activation**: profiles that declare `dsh.profile.patchReload: live` pick the entry up immediately —
-no DSH restart. Other profiles apply patches only at startup and need a restart.
-
-<details>
-<summary>Alternative install (as a bundle, requires a DSH restart)</summary>
-
-Drop the package into the profile's `node_modules` and add its name to `dsh.profile.bundles`
-in `profiles/<name>/package.json` (the package ships its own `cordis.patch.yml`, which inserts the
-loader entry). **Run `node deploy.mjs --remove` first**, otherwise the same `id` gets inserted twice.
-
-</details>
 
 ## Toggling
 
@@ -149,8 +151,9 @@ Counters worth watching:
 ```
 src/autopair.mjs        single source of truth: pair table, pure logic, Lexical adapter, apply(ctx)
 src/autopair.test.mjs   41 tests: pure logic + full flow on a mini DOM + a fake Lexical editor
+src/deploy.test.mjs     8 installer tests: block stripping, route choice, both routes, --check, uninstall
 build.mjs               renders src into lib/client.js (the DSH client bundle shape)
-deploy.mjs              install / uninstall
+deploy.mjs              install / uninstall (picks the loader mounting route automatically)
 tools/read-report.mjs   read the diagnostics report from disk
 lib/index.js            host half (no-op; exists so the loader mounts the package)
 lib/client.js           build output — do not edit by hand
@@ -158,9 +161,9 @@ cordis.patch.yml        loader entry used by bundle-style installs
 ```
 
 ```bash
-node --test src/autopair.test.mjs   # run tests
+node --test src/autopair.test.mjs src/deploy.test.mjs   # run all 49 tests
 node build.mjs                      # rebuild lib/client.js
-node deploy.mjs                     # install into the profile (hot-applied)
+node deploy.mjs                     # install into the profile
 ```
 
 To change the pair table, edit `DEFAULT_PAIRS` in `src/autopair.mjs`, then

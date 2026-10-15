@@ -4,6 +4,24 @@
 All notable changes to this plugin. Package versions map to the internal revisions the same way:
 `0.x.0` ↔ internal `vx`.
 
+## 0.4.1 — 2026-10-15（安装器修复；客户端逻辑未变，仍是内部 v4）
+
+**修复：同一个 loader id 不再挂两层。**
+Fix: the same loader id is no longer mounted twice.
+
+- `deploy.mjs` 现在按 profile 现状**二选一**挂 Loader 条目：profile 的 `dsh.profile.bundles`
+  里已登记本包 → 走 bundle 路线，并把 user-patch 里的托管块**删掉**；否则才在
+  `cordis.patch.yml` 里插一行。两条都插会让 `composer-autopair` 出现 2 行，
+  dshmarket 安装/更新插件后的「组合能否启动」检查会判成重复条目并自动回滚整次更新。
+  `deploy.mjs` now picks exactly one mounting route and never leaves both rows behind.
+- 托管块改成摘掉**全部**（旧版只摘第一个，重复运行会留下两行）。
+  The managed block is now stripped in full, not just its first occurrence.
+- `file:` 依赖改为指向稳定副本 `<DSH_HOME>/plugins/dsh-composer-autopair`，不再指向仓库目录：
+  仓库换位置时旧写法会变成悬空依赖，被 `pnpm install` 清掉后插件静默失效。
+  The `file:` dependency now points at a stable copy under `<DSH_HOME>/plugins/`.
+- `--remove` 顺带摘掉 `dsh.profile.bundles` 里的登记，不留悬空条目。
+- 新增 `src/deploy.test.mjs`（8 个用例：块摘除 / 路线选择 / 两条路线各装一遍 / `--check` 不写盘 / 卸载）；单测 41 → 49。
+
 ## 0.4.0 — 2026-10-05（内部 v4）
 
 **修复：引号不再「跳过去」，而是再嵌一对。**

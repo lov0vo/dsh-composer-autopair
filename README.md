@@ -34,7 +34,7 @@
 git clone https://github.com/lov0vo/dsh-composer-autopair
 cd dsh-composer-autopair
 
-node deploy.mjs            # 构建 + 安装 + 启用（热生效）
+node deploy.mjs            # 构建 + 安装（自动选择挂载方式）
 node deploy.mjs --check    # 只看会做什么，不写盘
 node deploy.mjs --remove   # 卸载（可逆）
 ```
@@ -42,8 +42,18 @@ node deploy.mjs --remove   # 卸载（可逆）
 `deploy.mjs` 具体做四件事：
 
 1. 由 `src/autopair.mjs` 生成 `lib/client.js`；
-2. 把包复制到 `<DSH_HOME>/profiles/desktop/node_modules/dsh-composer-autopair/`；
-3. 在 profile 的 `cordis.patch.yml` 末尾插入一段 Loader 条目（带 ASCII 首尾标记，幂等）：
+2. 把包复制到 `<DSH_HOME>/plugins/dsh-composer-autopair/`（**稳定副本**）和
+   `<DSH_HOME>/profiles/desktop/node_modules/dsh-composer-autopair/`；
+3. 在 profile 的 `package.json` 里登记 `file:` 依赖，指向**稳定副本**而不是仓库目录 ——
+   仓库换位置时旧写法会变成悬空依赖，被 `pnpm install` 顺手清掉，插件从此静默失效；
+4. 挂 Loader 条目，**按 profile 现状二选一**：
+
+   | profile 的 `dsh.profile.bundles` | 做法 | 生效方式 |
+   |---|---|---|
+   | 已登记本包（dshmarket 装的，或手动加过） | 走 **bundle 路线**：包自带的 `cordis.patch.yml` 会插入条目，deploy 只把 user-patch 里的托管块**清掉** | 需要重启 DSH（bundle 列表只在宿主启动时读） |
+   | 没有本包 | 走 **user-patch 路线**：在 profile 的 `cordis.patch.yml` 末尾插入托管块 | 该 profile 声明 `patchReload: live` 时插上即生效，不用重启 |
+
+   托管块长这样：
 
    ```yaml
    - insert:
@@ -51,21 +61,13 @@ node deploy.mjs --remove   # 卸载（可逆）
          name: dsh-composer-autopair
    ```
 
-4. 在 profile 的 `package.json` 里登记 `file:` 依赖，免得以后 `pnpm install` 把这个目录当垃圾清掉。
+   **为什么必须二选一**：两条都插会让 `composer-autopair` 这个 id 出现 **2 行**，
+   dshmarket 在安装 / 更新插件后做的「组合能否启动」静态检查会判成重复条目，
+   然后**自动回滚整次更新**。（本机真实 loader 是 1.0.5，重复其实只是「后层覆盖前层」；
+   但 dshmarket 是从 profile 的 `pnpm-lock.yaml` 读 loader 版本的，那里读不到这个包，
+   于是保守判成致命。）
 
 环境变量：`DSH_HOME`（默认 `~/.dsh`）、`DSH_PROFILE_DIR`（默认 `$DSH_HOME/profiles/desktop`）。
-
-**生效方式**：profile 里声明了 `dsh.profile.patchReload: live` 时**插上即生效、不用重启 DSH**；
-其他 profile 只在启动时应用 patch，需要重启 DSH。
-
-<details>
-<summary>另一种装法（按 bundle 安装，需要重启 DSH）</summary>
-
-把包放进 profile 的 `node_modules`，再把包名加进 `profiles/<name>/package.json` 的
-`dsh.profile.bundles`（本包自带 `cordis.patch.yml`，会自己插入 Loader 条目）。
-**注意**：走这条路之前先 `node deploy.mjs --remove`，否则同一个 `id` 会被插两次。
-
-</details>
 
 ## 开关
 
@@ -136,8 +138,9 @@ node tools/read-report.mjs "<leveldb 目录>"  # 自定义路径
 ```
 src/autopair.mjs        唯一真源：配对表、纯逻辑、Lexical 适配、插件入口 apply(ctx)
 src/autopair.test.mjs   单测（41 个用例：纯逻辑 + 迷你 DOM 全链路 + 假 Lexical 模型层）
+src/deploy.test.mjs     安装器单测（8 个用例：块摘除 / 路线选择 / 两条路线 / --check / 卸载）
 build.mjs               由 src 生成 lib/client.js（DSH 客户端 bundle 形状）
-deploy.mjs              安装 / 卸载
+deploy.mjs              安装 / 卸载（自动选择 Loader 挂载方式）
 tools/read-report.mjs   从磁盘读诊断报告
 lib/index.js            宿主半侧（no-op，只为让 Loader 挂载本包）
 lib/client.js           构建产物，勿手改
@@ -145,9 +148,9 @@ cordis.patch.yml        bundle 式安装用的 Loader 条目声明
 ```
 
 ```bash
-node --test src/autopair.test.mjs   # 跑单测
+node --test src/autopair.test.mjs src/deploy.test.mjs   # 跑单测（49 个）
 node build.mjs                      # 生成 lib/client.js
-node deploy.mjs                     # 装进 profile（热生效）
+node deploy.mjs                     # 装进 profile
 ```
 
 改配对表：编辑 `src/autopair.mjs` 的 `DEFAULT_PAIRS`，然后 `node build.mjs && node deploy.mjs`。
