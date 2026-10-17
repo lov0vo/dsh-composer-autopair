@@ -844,6 +844,44 @@ test('引号：输入法每次都提交左引号时，第二次也要成对（�
   assert.equal(api.stats.imeDuplicate, 0, '这是新的一次输入，不能当成重复提交');
 });
 
+test('引号：光标停在一对已有内容的引号之后，输入法提交右引号 → 改成新的一对', () => {
+  const world = createWorld();
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  // 手工造出 “你好”，光标停在最右边：左边那对已经被收尾，右边也没有可跳过的右半边
+  world.model.push('“', '你', '好', '”');
+  world.selection.anchor = world.selection.focus = 4;
+  fake.selection.anchor.offset = 4;
+  fake.selection.focus.offset = 4;
+
+  imeType(world, fake, '”');
+  world.fire('compositionend', { data: '”' });
+  world.flush();
+
+  assert.deepEqual(world.state(), { text: '“你好”“”', caret: 5, anchor: 5 });
+  assert.equal(api.stats.paired, 1, '这一下应该落成新的一对');
+  assert.equal(api.stats.skipped, 0);
+});
+
+test('引号：左边还有没被收尾的左引号时，提交的右引号保持不动（这才是正常收尾）', () => {
+  const world = createWorld();
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  world.model.push('“', '你', '好');
+  world.selection.anchor = world.selection.focus = 3;
+  fake.selection.anchor.offset = 3;
+  fake.selection.focus.offset = 3;
+
+  imeType(world, fake, '”');
+  world.fire('compositionend', { data: '”' });
+  world.flush();
+
+  assert.deepEqual(world.state(), { text: '“你好”', caret: 4, anchor: 4 });
+  assert.equal(api.stats.paired, 0, '这是收尾，不该再开一对');
+});
+
 test('诊断：trace 记下输入法提交的字符与处理结果，便于事后从磁盘上的报告还原现场', () => {
   const world = createWorld();
   const fake = attachFakeEditor(world);

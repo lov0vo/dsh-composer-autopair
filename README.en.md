@@ -138,7 +138,9 @@ Counters worth watching:
    `imeNotSettled`) rather than risk deleting what the IME just committed.
 5. **Quotes get their own rule.** After an opening quote, a Chinese IME only produces the closing
    quote, so "inside an *empty* pair" nests another pair, while "pair already has content" still skips
-   over. Brackets are unaffected.
+   over. And a committed closing quote with **no** unmatched opening quote to its left (the caret
+   sitting after a pair that already has content is the typical case) is rewritten into a fresh pair,
+   so quotes always end up paired. Brackets are unaffected.
 6. **Idempotent and disposable.** `installAutoPair` disposes the previous instance; the plugin entry
    registers cleanup through `ctx.effect`, so disabling or hot-reloading removes the listeners.
 
@@ -156,7 +158,7 @@ Counters worth watching:
 
 ```
 src/autopair.mjs        single source of truth: pair table, pure logic, Lexical adapter, apply(ctx)
-src/autopair.test.mjs   45 tests: pure logic + full flow on a mini DOM + a fake Lexical editor
+src/autopair.test.mjs   47 tests: pure logic + full flow on a mini DOM + a fake Lexical editor
 src/deploy.test.mjs     8 installer tests: block stripping, route choice, both routes, --check, uninstall
 build.mjs               renders src into lib/client.js (the DSH client bundle shape)
 deploy.mjs              install / uninstall (picks the loader mounting route automatically)
@@ -167,7 +169,7 @@ cordis.patch.yml        loader entry used by bundle-style installs
 ```
 
 ```bash
-node --test src/autopair.test.mjs src/deploy.test.mjs   # run all 53 tests
+node --test src/autopair.test.mjs src/deploy.test.mjs   # run all 55 tests
 node build.mjs                      # rebuild lib/client.js
 node deploy.mjs                     # install into the profile
 ```

@@ -124,7 +124,8 @@ node tools/read-report.mjs "<leveldb 目录>"  # 自定义路径
    避免重复的 `compositionend` 多补一个，也不会把「删掉整对后在原地重打」误判成重复提交。
    等不到就什么都不做（记 `imeNotSettled`），绝不删输入法刚提交的字符。
 5. **引号单独一条规则**：中文输入法在已开引号后只会给右引号，所以「空的一对中间」要再嵌一对，
-   而「已有内容」时仍然是跳过收尾。括号不受影响。
+   而「已有内容」时仍然是跳过收尾。提交上来的右引号若左边**没有**任何没收尾的左引号
+   （光标停在一对已有内容的引号之后就是这样），就把它改写成一对 —— 引号永远成对。括号不受影响。
 6. **幂等 + 可卸载**：`installAutoPair` 会先 `dispose()` 上一份；插件入口用 `ctx.effect`
    登记清理，停用 / 热重载时监听会被摘掉。
 
@@ -141,7 +142,7 @@ node tools/read-report.mjs "<leveldb 目录>"  # 自定义路径
 
 ```
 src/autopair.mjs        唯一真源：配对表、纯逻辑、Lexical 适配、插件入口 apply(ctx)
-src/autopair.test.mjs   单测（45 个用例：纯逻辑 + 迷你 DOM 全链路 + 假 Lexical 模型层）
+src/autopair.test.mjs   单测（47 个用例：纯逻辑 + 迷你 DOM 全链路 + 假 Lexical 模型层）
 src/deploy.test.mjs     安装器单测（8 个用例：块摘除 / 路线选择 / 两条路线 / --check / 卸载）
 build.mjs               由 src 生成 lib/client.js（DSH 客户端 bundle 形状）
 deploy.mjs              安装 / 卸载（自动选择 Loader 挂载方式）
@@ -152,7 +153,7 @@ cordis.patch.yml        bundle 式安装用的 Loader 条目声明
 ```
 
 ```bash
-node --test src/autopair.test.mjs src/deploy.test.mjs   # 跑单测（53 个）
+node --test src/autopair.test.mjs src/deploy.test.mjs   # 跑单测（55 个）
 node build.mjs                      # 生成 lib/client.js
 node deploy.mjs                     # 装进 profile
 ```

@@ -20,10 +20,15 @@ Fix: with a Chinese IME, quotes now pair up every time instead of only the first
   deliberately does nothing rather than risk deleting what the IME just committed.
 - 删掉了那条会误伤嵌套的 DOM 守卫（`nestQuoteInEditor` / `skipCommittedCloserInEditor`
   自己会校验光标右边是不是同一个右半边）。Removed the DOM guard that mis-fired on nesting.
+- 新增一条兜底：提交的右引号左边**没有任何等着收尾的左引号**时（典型场景：光标停在一对
+  **已经有内容**的引号之后，输入法却按自己的节奏给了右引号），把它就地改写成一对，
+  光标停在中间 —— 这样「无论怎么输入引号都成对」。左边真有没收尾的左引号时不动它，
+  那才是正常收尾。A committed closing quote with no unmatched opening quote to its left is
+  rewritten into a fresh pair, so quotes pair up no matter what the IME emits.
 - 新增 `trace`（最近 24 条事件流水：`bi` / `bi-other` / `kd` / `ce` / `ce-dom` / `ce-stale` /
   `dup` / `pair` / `nest` / `skip` / `noop`），随诊断报告一起落盘，事后能还原现场；
   `api.trace` 也可直接读。A 24-entry event trace now ships inside the diagnostic report.
-- 新增 4 个用例（模型晚一拍 / 连按引号键 / 输入法始终提交左引号 / trace 落盘）；单测总数 49 → 53（客户端 41 → 45）。
+- 新增 6 个用例（模型晚一拍 / 连按引号键 / 输入法始终提交左引号 / 已有内容的一对之后 / 正常收尾不受影响 / trace 落盘）；单测总数 49 → 55（客户端 41 → 47）。
 
 ## 0.4.1 — 2026-10-15（安装器修复；客户端逻辑未变，仍是内部 v4）
 
