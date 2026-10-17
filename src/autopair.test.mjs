@@ -15,6 +15,7 @@ import {
   installAutoPair,
   createAutoPair,
   apply,
+  currentCaret,
 } from './autopair.mjs';
 import { renderBundle } from '../build.mjs';
 
@@ -880,6 +881,86 @@ test('引号：左边还有没被收尾的左引号时，提交的右引号保�
 
   assert.deepEqual(world.state(), { text: '“你好”', caret: 4, anchor: 4 });
   assert.equal(api.stats.paired, 0, '这是收尾，不该再开一对');
+});
+
+test('模型光标：必须在 Lexical 的读取上下文里取节点（裸调 getNode 会抛错 → 读不到光标）', () => {
+  const world = createWorld();
+  const fake = attachFakeEditor(world);
+  // 模拟真实 Lexical：point.getNode() 内部走 $getNodeByKey，只有在「读取上下文」里才拿得到
+  // 「活动编辑器状态」——即 editor.update(cb) 的 cb 内、或 editorState.read(cb) 的 cb 内；
+  // 裸调（既不在 update 里也不在 read 里）直接抛错。
+  const state = fake.editor._editorState;
+  const realGetNode = state._selection.anchor.getNode;
+  let reading = false;
+  state._selection.anchor.getNode = function getNode() {
+    if (!reading) throw new Error('Unable to find an active editor state');
+    return realGetNode.call(this);
+  };
+  state.read = (fn) => {
+    reading = true;
+    try {
+      return fn();
+    } finally {
+      reading = false;
+    }
+  };
+  const realUpdate = fake.editor.update;
+  fake.editor.update = function update(run, ...rest) {
+    reading = true;
+    try {
+      return realUpdate.call(this, run, ...rest);
+    } finally {
+      reading = false;
+    }
+  };
+
+  const api = installAutoPair(world.win, world.doc);
+  imeType(world, fake, '（');
+  world.fire('compositionend', { data: '（' });
+  world.flush();
+
+  assert.equal(currentCaret(world.root).offset, 1, '应该能读到模型光标');
+  assert.deepEqual(world.state(), { text: '（）', caret: 1, anchor: 1 });
+  assert.equal(api.stats.viaDom, 0, '走的是模型层，不是 DOM 兜底');
+  assert.equal(api.stats.imeNotSettled, 0);
+  assert.ok(!api.trace.some((entry) => entry.kind === 'ce-nocaret'));
+});
+
+test('输入法：模型读不到光标时立刻走 DOM 兜底，不能什么都不补', () => {
+  const world = createWorld();
+  const fake = attachFakeEditor(world);
+  fake.editor._editorState = {}; // 这个 DSH 版本读不到模型光标
+  const api = installAutoPair(world.win, world.doc);
+
+  imeType(world, fake, '（');
+  world.fire('compositionend', { data: '（' });
+  world.flush();
+
+  assert.deepEqual(world.state(), { text: '（）', caret: 1, anchor: 1 });
+  assert.equal(api.stats.viaDom, 1);
+  assert.equal(api.stats.imeNotSettled, 1);
+  assert.ok(api.trace.some((entry) => entry.kind === 'ce-nocaret'));
+});
+
+test('输入法：模型一直没吸收这次提交时，等满 12 帧后走 DOM 兜底', () => {
+  const world = createWorld();
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  // DOM 里已经有输入法提交的字符，但模型光标故意停在提交前
+  world.model.push('（');
+  world.selection.anchor = 1;
+  world.selection.focus = 1;
+  fake.selection.anchor.offset = 0;
+  fake.selection.focus.offset = 0;
+
+  world.fire('compositionend', { data: '（' });
+  world.flush();
+
+  assert.equal(api.stats.imeNotSettled, 1);
+  assert.equal(api.stats.viaDom, 1);
+  assert.ok(api.trace.some((entry) => entry.kind === 'ce-stale'));
+  assert.deepEqual(world.state(), { text: '（）', caret: 1, anchor: 1 });
 });
 
 test('诊断：trace 记下输入法提交的字符与处理结果，便于事后从磁盘上的报告还原现场', () => {

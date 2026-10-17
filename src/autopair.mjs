@@ -15,7 +15,7 @@
  *     Lexical 自行把 DOM 选区同步回模型；不需要碰 Lexical 内部 API。
  */
 
-export const VERSION = 'v5';
+export const VERSION = 'v6';
 export const STORAGE_PREFIX = 'dsh-composer-autopair';
 export const COMPOSER_SELECTOR = '[data-composer-input]';
 
@@ -423,12 +423,22 @@ export function currentCaret(root) {
   if (!editor) return null;
   try {
     const state = editor._editorState;
-    const selection = state ? state._selection : null;
-    const point = selection && selection.anchor;
-    if (!point || point.type !== 'text') return null;
-    const node = typeof point.getNode === 'function' ? point.getNode() : null;
-    const text = node && typeof node.getTextContent === 'function' ? node.getTextContent() : '';
-    return { key: point.key, offset: point.offset, text };
+    if (!state) return null;
+    let out = null;
+    const inspect = () => {
+      const selection = state._selection;
+      const point = selection && selection.anchor;
+      if (!point || point.type !== 'text') return;
+      const node = typeof point.getNode === 'function' ? point.getNode() : null;
+      const text = node && typeof node.getTextContent === 'function' ? node.getTextContent() : '';
+      out = { key: point.key, offset: point.offset, text };
+    };
+    // 必须在 EditorState 的读取上下文里取节点：裸调 point.getNode() 时 Lexical 找不到
+    // 「活动编辑器状态」，$getNodeByKey 会直接抛错 —— 被外层 catch 吞掉后表现为
+    // 「永远读不到光标」（输入法提交时就会一路超时、什么都不补）。
+    if (typeof state.read === 'function') state.read(inspect);
+    else inspect();
+    return out;
   } catch (error) {
     return null;
   }
@@ -1014,20 +1024,23 @@ export function createAutoPair(win, doc, options = {}) {
     stats.imeCommits += 1;
     traceEvent('ce', last);
     const closer = isOpen ? index.openToClose.get(last) : last;
+    // DOM 兜底路径：v2 之前一直用它，能用但不保证模型选区跟着走。现在只在
+    // 「拿不到 Lexical 实例」或「模型迟迟读不到这次提交」时才走，保证任何情况下都补得上。
+    const domFallback = () => {
+      if (disposed || internal) return;
+      const context = activeRange(root);
+      if (!context || context.range.collapsed !== true) return;
+      if (probeChar('backward') !== last) return;
+      if (isClose && !isOpen && probeChar('forward') !== last) return; // 不是「跳过右半边」的场景
+      stats.viaDom += 1;
+      traceEvent('ce-dom', last);
+      if (isOpen) doAppendClose(index.openToClose.get(last));
+      else doSkipCommittedCloser();
+    };
     const editor = editorOf(root);
     if (!editor) {
-      // 拿不到 Lexical 实例（极老版本）：保留原来的 DOM 兜底路径
-      frame(() => {
-        if (disposed || internal) return;
-        const context = activeRange(root);
-        if (!context || context.range.collapsed !== true) return;
-        if (probeChar('backward') !== last) return;
-        if (isClose && !isOpen && probeChar('forward') !== last) return; // 不是「跳过右半边」的场景
-        stats.viaDom += 1;
-        traceEvent('ce-dom', last);
-        if (isOpen) doAppendClose(index.openToClose.get(last));
-        else doSkipCommittedCloser();
-      });
+      // 拿不到 Lexical 实例（极老版本）：只走 DOM 兜底
+      frame(domFallback);
       return;
     }
     // 输入法提交的时刻与 Lexical 把这次提交写进模型的时刻差的不止一拍：DOM 探针和模型
@@ -1038,16 +1051,24 @@ export function createAutoPair(win, doc, options = {}) {
     const step = () => {
       if (disposed || internal) return;
       const caret = currentCaret(root);
-      const absorbed = !!caret && caret.text.slice(caret.offset - last.length, caret.offset) === last;
+      if (!caret) {
+        // 这个 DSH 版本读不到模型光标：不空等，直接走 DOM 兜底（否则会「什么都不补」）
+        stats.imeNotSettled += 1;
+        traceEvent('ce-nocaret', last);
+        domFallback();
+        return;
+      }
+      const absorbed = caret.text.slice(caret.offset - last.length, caret.offset) === last;
       if (!absorbed) {
         if (tries < 12) {
           tries += 1;
           frame(step);
           return;
         }
-        // 模型迟迟没吸收这次提交：宁可不动作，也绝不去删输入法刚提交的字符
+        // 模型迟迟没吸收这次提交：交给 DOM 兜底，而不是什么都不做
         stats.imeNotSettled += 1;
-        traceEvent('ce-stale', last);
+        traceEvent('ce-stale', last + ' @' + caret.offset + ' …' + caret.text.slice(-4));
+        domFallback();
         return;
       }
       if (isOwnCompletion(root, isOpen ? last : '', closer)) {

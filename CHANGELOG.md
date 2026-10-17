@@ -4,6 +4,25 @@
 All notable changes to this plugin. Package versions map to the internal revisions the same way:
 `0.x.0` ↔ internal `vx`.
 
+## 0.5.1 — 2026-10-17（内部 v6）
+
+**修复 0.5.0 的回归：中文输入法下所有符号都不成对了（只出一个）。**
+Fix for a 0.5.0 regression: with a Chinese IME no symbol paired up at all.
+
+- 根因：0.5.0 把 `currentCaret()` 当成主判据，而它在 Lexical 的读取上下文之外裸调
+  `point.getNode()` —— 真实 Lexical 里这会抛「找不到活动编辑器状态」（`Unable to find an
+  active editor state`），异常被吞掉后表现为「永远读不到光标」：轮询一路超时，每次输入法
+  提交都记 `imeNotSettled`，于是什么都不补。In 0.5.0 `currentCaret()` called
+  `point.getNode()` outside a Lexical read context; real Lexical throws there, the error was
+  swallowed, the poll timed out every time and nothing was ever paired.
+- 修法一：`currentCaret()` 改在 `editorState.read(...)` 里取节点，模型探针重新可用。
+  Now reads the node inside `editorState.read(...)`.
+- 修法二：**任何情况下都不再「什么都不做」**——读不到模型光标（trace 记 `ce-nocaret`）或等满
+  12 帧仍没吸收（trace 记 `ce-stale`）时，立刻回退到 DOM 兜底路径补全。A DOM fallback now
+  covers both the unreadable-caret and never-absorbed cases.
+- 单测 55 → 58：新增「必须在读取上下文里取节点」（模拟真实 Lexical，裸调即抛错）、
+  「读不到光标 → 立刻 DOM 兜底」、「一直没吸收 → 12 帧后 DOM 兜底」。
+
 ## 0.5.0 — 2026-10-17（内部 v5）
 
 **修复：中文输入法下引号每次都要成对，不再「第一次成对、第二次只出一个」。**
