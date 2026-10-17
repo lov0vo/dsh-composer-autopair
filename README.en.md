@@ -91,7 +91,7 @@ Every 3 seconds the plugin writes a self-check report to localStorage, readable 
 
 | Key | Content |
 |---|---|
-| `dsh-composer-autopair-report` | `caps` (editor instance found? last model-layer error), `stats` (counters), `log` (last 12 actions) |
+| `dsh-composer-autopair-report` | `caps` (editor instance found? last model-layer error), `stats` (counters), `log` (last 12 actions), `trace` (last 24 events — enough to replay what one keypress actually did) |
 | `dsh-composer-autopair:probe` | Load beacon — present means the plugin really ran |
 | `dsh-composer-autopair:error` | Load / model-layer errors |
 | `dsh-composer-autopair:enabled` | `on` / `off` |
@@ -106,7 +106,9 @@ Counters worth watching:
 - `viaEditor` / `viaDom` — handled by the "Lexical model layer" or by the "DOM fallback".
   In normal operation `viaEditor` grows and `viaDom` stays 0;
 - `nested` — how many times an extra pair was nested inside an empty quote pair;
-- `imeCommits` / `imePaired` / `imeSkippedCloser` / `imeDuplicate` — the four IME branches.
+- `imeCommits` / `imePaired` / `imeSkippedCloser` / `imeDuplicate` — the four IME branches;
+- `imeNotSettled` — times the plugin gave up because the model never absorbed the IME commit.
+  This should stay 0; if it keeps growing, the input path changed and `trace` shows where it stalled.
 
 > LevelDB flushes lazily: when the DSH window is in the background Chromium throttles timers to
 > roughly once a minute, and flushes are slow too. Read 1–2 minutes after an action, otherwise you
@@ -126,10 +128,14 @@ Counters worth watching:
 3. **The DOM path is only a fallback**, used when no editor instance is available (or the selection
    contains decorator nodes such as `@` reference chips):
    `document.execCommand('insertText')` + `Selection.modify()`.
-4. **The IME path is handled separately.** `compositionend` decides whether an opening or closing half
-   was committed. Our own appended closing half is recognised by a fingerprint record (text node key +
-   caret offset + both halves + timestamp), so a duplicate `compositionend` cannot double-insert, and
-   "delete the pair, then type the same opening half in the same spot" is not misread as a duplicate.
+4. **The IME path is handled separately.** When `compositionend` arrives, Lexical usually has not yet
+   written that commit into its model, so the plugin **polls the model** (up to 12 frames) until the
+   committed character lands next to the caret, and only then decides whether an opening or closing
+   half was committed. Our own appended closing half is recognised by a fingerprint record (text node
+   key + caret offset + both halves + timestamp), so a duplicate `compositionend` cannot
+   double-insert, and "delete the pair, then type the same opening half in the same spot" is not
+   misread as a duplicate. If the model never settles the plugin does nothing at all (recording
+   `imeNotSettled`) rather than risk deleting what the IME just committed.
 5. **Quotes get their own rule.** After an opening quote, a Chinese IME only produces the closing
    quote, so "inside an *empty* pair" nests another pair, while "pair already has content" still skips
    over. Brackets are unaffected.
@@ -150,7 +156,7 @@ Counters worth watching:
 
 ```
 src/autopair.mjs        single source of truth: pair table, pure logic, Lexical adapter, apply(ctx)
-src/autopair.test.mjs   41 tests: pure logic + full flow on a mini DOM + a fake Lexical editor
+src/autopair.test.mjs   45 tests: pure logic + full flow on a mini DOM + a fake Lexical editor
 src/deploy.test.mjs     8 installer tests: block stripping, route choice, both routes, --check, uninstall
 build.mjs               renders src into lib/client.js (the DSH client bundle shape)
 deploy.mjs              install / uninstall (picks the loader mounting route automatically)
@@ -161,7 +167,7 @@ cordis.patch.yml        loader entry used by bundle-style installs
 ```
 
 ```bash
-node --test src/autopair.test.mjs src/deploy.test.mjs   # run all 49 tests
+node --test src/autopair.test.mjs src/deploy.test.mjs   # run all 53 tests
 node build.mjs                      # rebuild lib/client.js
 node deploy.mjs                     # install into the profile
 ```

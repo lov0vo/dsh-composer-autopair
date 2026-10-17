@@ -15,7 +15,7 @@
  *     Lexical 自行把 DOM 选区同步回模型；不需要碰 Lexical 内部 API。
  */
 
-export const VERSION = 'v4';
+export const VERSION = 'v5';
 export const STORAGE_PREFIX = 'dsh-composer-autopair';
 export const COMPOSER_SELECTOR = '[data-composer-input]';
 
@@ -559,9 +559,20 @@ export function createAutoPair(win, doc, options = {}) {
   const stats = {
     paired: 0, wrapped: 0, skipped: 0, deleted: 0, blocked: 0, errors: 0,
     nested: 0, viaEditor: 0, viaDom: 0,
-    imeCommits: 0, imePaired: 0, imeSkippedCloser: 0, imeDuplicate: 0,
+    imeCommits: 0, imePaired: 0, imeSkippedCloser: 0, imeDuplicate: 0, imeNotSettled: 0,
   };
   const log = [];
+  /** 诊断用的事件流水（最近 24 条）：事后能从磁盘上的报告里还原「到底发生了什么事件」。 */
+  const trace = [];
+
+  function traceEvent(kind, detail) {
+    try {
+      trace.push({ t: Date.now(), kind, d: detail === undefined ? '' : String(detail).slice(0, 16) });
+      if (trace.length > 24) trace.shift();
+    } catch (error) {
+      /* 诊断失败不能影响功能 */
+    }
+  }
   let disposed = false;
   let internal = false;
   let enabled = true;
@@ -601,6 +612,7 @@ export function createAutoPair(win, doc, options = {}) {
     report.enabled = enabled;
     report.at = new Date().toISOString();
     report.log = log.slice(-12);
+    report.trace = trace.slice(-24);
     report.caps = capabilities();
     try {
       win.localStorage.setItem(STORAGE_PREFIX, VERSION + ' ' + report.at);
@@ -852,12 +864,19 @@ export function createAutoPair(win, doc, options = {}) {
     if (disposed || !enabled || internal) return;
     if (event.defaultPrevented) return;
     const type = event.inputType;
-    if (type !== 'insertText' && type !== 'insertReplacementText') return;
     const data = event.data;
+    const pairChar = typeof data === 'string' && charLength(data) === 1
+      && (index.openToClose.has(data) || index.closers.has(data));
+    if (type !== 'insertText' && type !== 'insertReplacementText') {
+      // 例：insertCompositionText —— 输入法正在组合，这种事件不可拦截，只能记下来事后处理
+      if (pairChar) traceEvent('bi-other', type + ':' + data);
+      return;
+    }
     if (typeof data !== 'string' || charLength(data) !== 1) return;
     const isOpen = index.openToClose.has(data);
     const isClose = index.closers.has(data);
     if (!isOpen && !isClose) return; // 普通字符完全不插手
+    traceEvent('bi', data);
     const root = composerOf(event.target);
     if (!root) return;
     if (isClose && !isOpen && probeChar('forward') !== data) return; // 不是「跳过右半边」的场景
@@ -916,6 +935,11 @@ export function createAutoPair(win, doc, options = {}) {
   function onKeyDown(event) {
     if (disposed || !enabled || internal) return;
     if (event.defaultPrevented) return;
+    if (typeof event.key === 'string' && event.key.length === 1
+      && (index.openToClose.has(event.key) || index.closers.has(event.key))) {
+      // 只记配对键的按下：用来区分「输入法没给事件」和「我们判断错了」
+      traceEvent('kd', event.key + (event.isComposing ? ':c' : ''));
+    }
     if (event.key !== 'Backspace' && event.keyCode !== 8) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.isComposing || event.keyCode === 229) return;
@@ -954,17 +978,48 @@ export function createAutoPair(win, doc, options = {}) {
     const isClose = index.closers.has(last);
     if (!isOpen && !isClose) return;
     stats.imeCommits += 1;
-    // 输入法提交时刻与 DOM/Lexical 落库时刻可能差一拍，等一帧再看。
-    frame(() => {
+    traceEvent('ce', last);
+    const closer = isOpen ? index.openToClose.get(last) : last;
+    const editor = editorOf(root);
+    if (!editor) {
+      // 拿不到 Lexical 实例（极老版本）：保留原来的 DOM 兜底路径
+      frame(() => {
+        if (disposed || internal) return;
+        const context = activeRange(root);
+        if (!context || context.range.collapsed !== true) return;
+        if (probeChar('backward') !== last) return;
+        if (isClose && !isOpen && probeChar('forward') !== last) return; // 不是「跳过右半边」的场景
+        stats.viaDom += 1;
+        traceEvent('ce-dom', last);
+        if (isOpen) doAppendClose(index.openToClose.get(last));
+        else doSkipCommittedCloser();
+      });
+      return;
+    }
+    // 输入法提交的时刻与 Lexical 把这次提交写进模型的时刻差的不止一拍：DOM 探针和模型
+    // 都可能还停在提交前。老实现「等一帧 → 用 DOM 探针判断 → 对不上就整段放弃」，在中文
+    // 输入法下会让第二次按引号键提交的右引号孤零零留在正文里（第一次成对、第二次不成对）。
+    // 改成轮询模型，直到这次提交真的落进模型（提交的字符就在光标左边），再做判断。
+    let tries = 0;
+    const step = () => {
       if (disposed || internal) return;
-      const context = activeRange(root);
-      if (!context || context.range.collapsed !== true) return;
-      if (probeChar('backward') !== last) return;
-      if (isClose && !isOpen && probeChar('forward') !== last) return; // 不是「跳过右半边」的场景
-      const closer = isOpen ? index.openToClose.get(last) : last;
+      const caret = currentCaret(root);
+      const absorbed = !!caret && caret.text.slice(caret.offset - last.length, caret.offset) === last;
+      if (!absorbed) {
+        if (tries < 12) {
+          tries += 1;
+          frame(step);
+          return;
+        }
+        // 模型迟迟没吸收这次提交：宁可不动作，也绝不去删输入法刚提交的字符
+        stats.imeNotSettled += 1;
+        traceEvent('ce-stale', last);
+        return;
+      }
       if (isOwnCompletion(root, isOpen ? last : '', closer)) {
         // 重复的 compositionend：右边那个右半边是我们自己刚补的，不是新输入
         stats.imeDuplicate += 1;
+        traceEvent('dup', last);
         return;
       }
       const viaEditor = finishCompositionInEditor(root, last, index);
@@ -973,6 +1028,7 @@ export function createAutoPair(win, doc, options = {}) {
         stats.imePaired += 1;
         stats.viaEditor += 1;
         note('pair-ime', last);
+        traceEvent('pair', last);
         return;
       }
       if (viaEditor === 'nest') {
@@ -980,6 +1036,7 @@ export function createAutoPair(win, doc, options = {}) {
         stats.nested += 1;
         stats.viaEditor += 1;
         note('nest-quote-ime', last);
+        traceEvent('nest', last);
         return;
       }
       if (viaEditor === 'skip') {
@@ -987,13 +1044,13 @@ export function createAutoPair(win, doc, options = {}) {
         stats.imeSkippedCloser += 1;
         stats.viaEditor += 1;
         note('skip-ime', last);
+        traceEvent('skip', last);
         return;
       }
-      // 模型层不可用：DOM 兜底
-      stats.viaDom += 1;
-      if (isOpen) doAppendClose(index.openToClose.get(last));
-      else doSkipCommittedCloser();
-    });
+      // 判断结果就是「不动」：例如收尾的右引号、光标不在空引号对中间 —— 保持原样
+      traceEvent('noop', last);
+    };
+    frame(step);
   }
 
   /**
@@ -1054,6 +1111,7 @@ export function createAutoPair(win, doc, options = {}) {
     version: VERSION,
     stats,
     log,
+    trace,
     report,
     get enabled() {
       return enabled;

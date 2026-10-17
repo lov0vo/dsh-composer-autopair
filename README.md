@@ -86,7 +86,7 @@ localStorage.setItem('dsh-composer-autopair:enabled', 'off');  // 重启后仍�
 
 | 键 | 内容 |
 |---|---|
-| `dsh-composer-autopair-report` | `caps`（是否取到编辑器实例、模型层最近一次异常）、`stats`（各类计数）、`log`（最近 12 条动作） |
+| `dsh-composer-autopair-report` | `caps`（是否取到编辑器实例、模型层最近一次异常）、`stats`（各类计数）、`log`（最近 12 条动作）、`trace`（最近 24 条事件流水，用来还原「这一次按键到底发生了什么」） |
 | `dsh-composer-autopair:probe` | 装载探针：能读到就说明插件真的跑起来了 |
 | `dsh-composer-autopair:error` | 装载 / 模型层异常 |
 | `dsh-composer-autopair:enabled` | `on` / `off` |
@@ -100,7 +100,9 @@ node tools/read-report.mjs "<leveldb 目录>"  # 自定义路径
 
 - `viaEditor` / `viaDom`：走「Lexical 模型层」还是走「DOM 兜底路径」。正常情况 `viaEditor` 增长、`viaDom` 为 0；
 - `nested`：在空引号里再嵌一对的次数；
-- `imeCommits` / `imePaired` / `imeSkippedCloser` / `imeDuplicate`：输入法路径的四个分支。
+- `imeCommits` / `imePaired` / `imeSkippedCloser` / `imeDuplicate`：输入法路径的四个分支；
+- `imeNotSettled`：输入法提交后模型迟迟没吸收、插件主动放弃的次数。正常应该是 0；
+  它持续增长说明 DSH 的输入链路变了，此时报告里的 `trace` 能看出卡在哪一步。
 
 > LevelDB 落盘有延迟：DSH 窗口不在前台时，Chromium 会把定时器压到约 60 秒一次、落盘也慢。
 > 刚改完代码或刚操作完立刻读，可能读到上一版；等 1～2 分钟再看。压缩进 `.ldb` 之后读不出明文，
@@ -116,9 +118,11 @@ node tools/read-report.mjs "<leveldb 目录>"  # 自定义路径
    这是「光标一定在中间 / 中间的删除键能用 / 选中文字会被包起来」的前提。
 3. **DOM 路径只作兜底**：拿不到编辑器实例（或选区里有 `@` 引用 chip 这类装饰节点）时，
    回退到 `document.execCommand('insertText')` + `Selection.modify()`。
-4. **输入法路径单独处理**：`compositionend` 里判断刚提交的是左半边还是右半边；
+4. **输入法路径单独处理**：`compositionend` 到达时 Lexical 往往还没把这次提交写进模型，
+   所以这里**轮询模型**（最多 12 帧）等它落位，再做判断：刚提交的是左半边还是右半边；
    「我自己补的右半边」用一条带指纹的记录（文本节点 key + 光标位置 + 左右半边 + 时间）来识别，
    避免重复的 `compositionend` 多补一个，也不会把「删掉整对后在原地重打」误判成重复提交。
+   等不到就什么都不做（记 `imeNotSettled`），绝不删输入法刚提交的字符。
 5. **引号单独一条规则**：中文输入法在已开引号后只会给右引号，所以「空的一对中间」要再嵌一对，
    而「已有内容」时仍然是跳过收尾。括号不受影响。
 6. **幂等 + 可卸载**：`installAutoPair` 会先 `dispose()` 上一份；插件入口用 `ctx.effect`
@@ -137,7 +141,7 @@ node tools/read-report.mjs "<leveldb 目录>"  # 自定义路径
 
 ```
 src/autopair.mjs        唯一真源：配对表、纯逻辑、Lexical 适配、插件入口 apply(ctx)
-src/autopair.test.mjs   单测（41 个用例：纯逻辑 + 迷你 DOM 全链路 + 假 Lexical 模型层）
+src/autopair.test.mjs   单测（45 个用例：纯逻辑 + 迷你 DOM 全链路 + 假 Lexical 模型层）
 src/deploy.test.mjs     安装器单测（8 个用例：块摘除 / 路线选择 / 两条路线 / --check / 卸载）
 build.mjs               由 src 生成 lib/client.js（DSH 客户端 bundle 形状）
 deploy.mjs              安装 / 卸载（自动选择 Loader 挂载方式）
@@ -148,7 +152,7 @@ cordis.patch.yml        bundle 式安装用的 Loader 条目声明
 ```
 
 ```bash
-node --test src/autopair.test.mjs src/deploy.test.mjs   # 跑单测（49 个）
+node --test src/autopair.test.mjs src/deploy.test.mjs   # 跑单测（53 个）
 node build.mjs                      # 生成 lib/client.js
 node deploy.mjs                     # 装进 profile
 ```

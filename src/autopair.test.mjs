@@ -779,3 +779,82 @@ test('引号：半角双引号在一对中间再打一次 → 变成两对', () 
   world.flush();
   assert.deepEqual(world.state(), { text: '""""', caret: 2, anchor: 2 });
 });
+
+test('引号：模型晚一拍才吸收输入法提交的右引号时，仍要嵌成一对（不许留孤引号）', () => {
+  const world = createWorld();
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  imeType(world, fake, '“');
+  world.fire('compositionend', { data: '“' });
+  world.flush();
+  assert.deepEqual(world.state(), { text: '“”', caret: 1, anchor: 1 });
+
+  // 真实时序：compositionend 先到，Lexical 过一两帧才把这次提交写进模型。
+  world.fire('compositionend', { data: '”' });
+  world.flush(1); // 第一帧：模型里还没有这个字符 → 必须继续等
+  assert.equal(world.state().text, '“”', '模型还没吸收这次提交时，不许对正文动手');
+
+  imeType(world, fake, '”'); // Lexical 这时才把提交写进模型
+  world.flush(1); // 下一帧：应该嵌成一对
+  assert.deepEqual(world.state(), { text: '““””', caret: 2, anchor: 2 });
+  assert.equal(api.stats.nested, 1);
+  assert.equal(api.stats.imeNotSettled, 0);
+});
+
+test('引号：中文输入法连按引号键，每一次都要落成一对（第一次成对、第二次也是）', () => {
+  const world = createWorld();
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  // 输入法的规律：光标左边是左引号就给右引号，否则给左引号
+  const pressQuote = () => {
+    const before = world.model[world.selection.focus - 1];
+    const ch = before === '“' ? '”' : '“';
+    imeType(world, fake, ch);
+    world.fire('compositionend', { data: ch });
+    world.flush();
+    return ch;
+  };
+
+  assert.equal(pressQuote(), '“');
+  assert.deepEqual(world.state(), { text: '“”', caret: 1, anchor: 1 });
+  assert.equal(pressQuote(), '”');
+  assert.deepEqual(world.state(), { text: '““””', caret: 2, anchor: 2 });
+  assert.equal(pressQuote(), '”');
+  assert.deepEqual(world.state(), { text: '“““”””', caret: 3, anchor: 3 });
+  assert.equal(api.stats.paired, 3, '三次按键都该算成「落成了一对」');
+  assert.equal(api.stats.imeNotSettled, 0);
+});
+
+test('引号：输入法每次都提交左引号时，第二次也要成对（再嵌一对）', () => {
+  const world = createWorld();
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  imeType(world, fake, '“');
+  world.fire('compositionend', { data: '“' });
+  world.flush();
+  assert.deepEqual(world.state(), { text: '“”', caret: 1, anchor: 1 });
+
+  imeType(world, fake, '“');
+  world.fire('compositionend', { data: '“' });
+  world.flush();
+  assert.deepEqual(world.state(), { text: '““””', caret: 2, anchor: 2 });
+  assert.equal(api.stats.imeDuplicate, 0, '这是新的一次输入，不能当成重复提交');
+});
+
+test('诊断：trace 记下输入法提交的字符与处理结果，便于事后从磁盘上的报告还原现场', () => {
+  const world = createWorld();
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  imeType(world, fake, '“');
+  world.fire('compositionend', { data: '“' });
+  world.flush();
+
+  const kinds = api.trace.map((entry) => entry.kind);
+  assert.ok(kinds.includes('ce'), '要记下 compositionend');
+  assert.ok(kinds.includes('pair'), '要记下处理结果');
+  assert.equal(api.trace.find((entry) => entry.kind === 'ce').d, '“');
+});

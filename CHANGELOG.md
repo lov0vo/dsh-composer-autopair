@@ -4,6 +4,27 @@
 All notable changes to this plugin. Package versions map to the internal revisions the same way:
 `0.x.0` ↔ internal `vx`.
 
+## 0.5.0 — 2026-10-17（内部 v5）
+
+**修复：中文输入法下引号每次都要成对，不再「第一次成对、第二次只出一个」。**
+Fix: with a Chinese IME, quotes now pair up every time instead of only the first time.
+
+- 根因：`compositionend` 到达时 Lexical 还没把这次提交写进模型，DOM 探针也还停在提交前。
+  旧实现只等一帧、且完全依赖 DOM 探针，对不上就整段放弃 → 第二次按引号键提交的右引号
+  孤零零留在正文里。The committed character lands in Lexical's model a frame or two after
+  `compositionend`; the old code waited a single frame on a DOM-only probe and gave up
+  entirely when it did not match, leaving a lone closing quote behind.
+- 改成**轮询模型**：每帧检查这次提交是否已经落到光标左边，最多等 12 帧；
+  超时就记 `imeNotSettled` 并**什么都不做**（宁可不动，也绝不删输入法刚提交的字符）。
+  Now polls the model for up to 12 frames; on timeout it records `imeNotSettled` and
+  deliberately does nothing rather than risk deleting what the IME just committed.
+- 删掉了那条会误伤嵌套的 DOM 守卫（`nestQuoteInEditor` / `skipCommittedCloserInEditor`
+  自己会校验光标右边是不是同一个右半边）。Removed the DOM guard that mis-fired on nesting.
+- 新增 `trace`（最近 24 条事件流水：`bi` / `bi-other` / `kd` / `ce` / `ce-dom` / `ce-stale` /
+  `dup` / `pair` / `nest` / `skip` / `noop`），随诊断报告一起落盘，事后能还原现场；
+  `api.trace` 也可直接读。A 24-entry event trace now ships inside the diagnostic report.
+- 新增 4 个用例（模型晚一拍 / 连按引号键 / 输入法始终提交左引号 / trace 落盘）；单测总数 49 → 53（客户端 41 → 45）。
+
 ## 0.4.1 — 2026-10-15（安装器修复；客户端逻辑未变，仍是内部 v4）
 
 **修复：同一个 loader id 不再挂两层。**
