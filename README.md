@@ -165,6 +165,21 @@ node deploy.mjs                     # 装进 profile
 在 DSH 桌面端（profile `desktop`，Windows）实测；凡是聊天输入框用同一套 Lexical 编辑器的
 DSH 版本理论上都适用。装好后报告里的 `caps.composerReady` 为 `true` 才说明锚点对得上。
 
+## 更新日志
+
+每个版本的改动、根因和取舍都记在 [CHANGELOG.md](CHANGELOG.md)（中文为主，标题带英文摘要）；
+带说明的正式发布见 [Releases](https://github.com/lov0vo/dsh-composer-autopair/releases)。
+
+最近几版：
+
+| 版本 | 内部修订 | 一句话 |
+| --- | --- | --- |
+| 0.5.3 | v8 | 输入法包裹选区不再比对会被 Lexical 重建的节点身份（0.5.2 在真实编辑器里没生效） |
+| 0.5.2 | v7 | 中文输入法选中文字再按符号，包住原文而不是替换掉 |
+| 0.5.1 | v6 | 修 0.5.0 回归：读不到模型光标时不再「什么都不补」 |
+| 0.5.0 | v5 | 中文输入法下引号每次都要成对 |
+| 0.4.1 | v4 | 同一个 loader id 不再挂两层（bundle 与 user-patch 二选一） |
+
 ## 许可
 
 [MIT](LICENSE)

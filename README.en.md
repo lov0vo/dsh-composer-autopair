@@ -183,6 +183,22 @@ Tested on DSH desktop (profile `desktop`, Windows). Any DSH build whose chat com
 Lexical editor should work; after installing, `caps.composerReady === true` in the report means the
 anchor matched.
 
+## Changelog
+
+Every release, including the root cause behind each fix, is documented in
+[CHANGELOG.md](CHANGELOG.md) (Chinese first, with English summaries). Tagged releases with notes are
+on the [Releases](https://github.com/lov0vo/dsh-composer-autopair/releases) page.
+
+Recent versions:
+
+| Version | Internal | In one line |
+| --- | --- | --- |
+| 0.5.3 | v8 | Wrapping a selection no longer relies on node identity that Lexical re-creates (0.5.2 did not fire in the real editor) |
+| 0.5.2 | v7 | With a Chinese IME, typing a symbol over a selection wraps it instead of replacing it |
+| 0.5.1 | v6 | Fixes a 0.5.0 regression: no more "nothing is paired" when the model caret is unreadable |
+| 0.5.0 | v5 | Quotes pair up every time under a Chinese IME |
+| 0.4.1 | v4 | A loader id is never mounted twice (bundle or user-patch, not both) |
+
 ## License
 
 [MIT](LICENSE)
