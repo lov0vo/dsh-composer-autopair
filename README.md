@@ -142,7 +142,7 @@ node tools/read-report.mjs "<leveldb 目录>"  # 自定义路径
 
 ```
 src/autopair.mjs        唯一真源：配对表、纯逻辑、Lexical 适配、插件入口 apply(ctx)
-src/autopair.test.mjs   单测（50 个用例：纯逻辑 + 迷你 DOM 全链路 + 假 Lexical 模型层）
+src/autopair.test.mjs   单测（55 个用例：纯逻辑 + 迷你 DOM 全链路 + 假 Lexical 模型层）
 src/deploy.test.mjs     安装器单测（8 个用例：块摘除 / 路线选择 / 两条路线 / --check / 卸载）
 build.mjs               由 src 生成 lib/client.js（DSH 客户端 bundle 形状）
 deploy.mjs              安装 / 卸载（自动选择 Loader 挂载方式）
@@ -153,7 +153,7 @@ cordis.patch.yml        bundle 式安装用的 Loader 条目声明
 ```
 
 ```bash
-node --test src/autopair.test.mjs src/deploy.test.mjs   # 跑单测（58 个）
+node --test src/autopair.test.mjs src/deploy.test.mjs   # 跑单测（63 个）
 node build.mjs                      # 生成 lib/client.js
 node deploy.mjs                     # 装进 profile
 ```

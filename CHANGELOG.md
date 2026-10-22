@@ -4,6 +4,25 @@
 All notable changes to this plugin. Package versions map to the internal revisions the same way:
 `0.x.0` ↔ internal `vx`.
 
+## 0.5.2 — 2026-10-22（内部 v7）
+
+**中文输入法下选中一段文字再按符号，不再把原文替换掉，而是包住原文。**
+With a Chinese IME, selecting text and then typing a symbol now wraps the selection instead of
+replacing it.
+
+- 根因：输入法提交符号时，浏览器先把选中的文字删掉、再插入它自己提交的那个字符；等
+  `compositionend` 到达时原文已经没了，插件只能看到「光标左边多了一个 `（`」，于是按「补一对」
+  处理 —— 原文被替换成了 `（）`。The IME deletes the selection before committing, so by the time
+  `compositionend` arrives the selected text is already gone and the plugin could only see the
+  freshly committed bracket.
+- 修法：在 `compositionstart`（以及 `beforeinput` 的 `insertCompositionText`，兜底那些先删选区
+  再发事件的浏览器）把**选区原文**记下来；`compositionend` 确认提交字符落进模型后，把光标左边
+  那个符号改写成 `open + 原文 + close`，并把原文重新选中 —— 与直接打字时的包裹表现完全一致。
+  The selection text is captured before the IME destroys it and re-applied as a wrap on commit.
+- 位置对不上（普通插入而不是替换选区）时不动，交给原来的「补右半边」逻辑。
+- 诊断：新增 `stats.imeWrapped`，trace 记 `cs` / `bi-cs` / `wrap-ime`。
+- 单测 55 → 63（新增 4 个：全角/半角包裹、无选区不误判、非配对字符不插手）。
+
 ## 0.5.1 — 2026-10-17（内部 v6）
 
 **修复 0.5.0 的回归：中文输入法下所有符号都不成对了（只出一个）。**

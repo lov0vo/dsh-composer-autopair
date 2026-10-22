@@ -15,7 +15,7 @@
  *     Lexical 自行把 DOM 选区同步回模型；不需要碰 Lexical 内部 API。
  */
 
-export const VERSION = 'v6';
+export const VERSION = 'v7';
 export const STORAGE_PREFIX = 'dsh-composer-autopair';
 export const COMPOSER_SELECTOR = '[data-composer-input]';
 
@@ -369,6 +369,33 @@ export function wrapInEditor(editor, open, close) {
   });
 }
 
+/**
+ * 输入法把选中的文字**替换**成了左半边：用组合开始前记下的原文把这一对补回去 ——
+ * 把光标左边那个刚提交的 `open` 改写成 `open + 原文 + close`，并把原文重新选中
+ * （与直接打字时的「包裹」表现一致）。
+ *
+ * 位置对不上（不是「替换选区」而是普通插入）时什么都不做，交给常规的补右半边。
+ */
+export function wrapCommittedOpenInEditor(editor, open, close, snapshot) {
+  if (!snapshot || typeof snapshot.text !== 'string' || snapshot.text.length === 0) return false;
+  return withEditorSelection(editor, (selection) => {
+    const ctx = caretPoint(selection);
+    if (!ctx) return false;
+    const openLen = open.length;
+    if (ctx.text.slice(ctx.offset - openLen, ctx.offset) !== open) return false; // 提交的符号不在光标左边
+    if (!ctx.node || ctx.node.__key !== snapshot.key) return false; // 不是同一段文本，不敢动
+    if (ctx.offset !== snapshot.start + openLen) return false; // 位置对不上 → 不是「替换选区」
+    const start = ctx.offset - openLen;
+    const replacement = open + snapshot.text + close;
+    const next = ctx.text.slice(0, start) + replacement + ctx.text.slice(ctx.offset);
+    if (typeof ctx.node.setTextContent === 'function') ctx.node.setTextContent(next);
+    else if (typeof ctx.node.spliceText === 'function') ctx.node.spliceText(start, openLen, replacement);
+    else return false;
+    const innerEnd = start + openLen + snapshot.text.length;
+    return setRangeOnNode(selection, ctx.node, innerEnd - snapshot.text.length, innerEnd);
+  });
+}
+
 /** 已有右半边时再打一次右半边 → 光标跳过它（模型层）。 */
 export function skipClosingInEditor(editor, close) {
   return withEditorSelection(editor, (selection) => {
@@ -436,6 +463,45 @@ export function currentCaret(root) {
     // 必须在 EditorState 的读取上下文里取节点：裸调 point.getNode() 时 Lexical 找不到
     // 「活动编辑器状态」，$getNodeByKey 会直接抛错 —— 被外层 catch 吞掉后表现为
     // 「永远读不到光标」（输入法提交时就会一路超时、什么都不补）。
+    if (typeof state.read === 'function') state.read(inspect);
+    else inspect();
+    return out;
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * 读当前（已提交）模型选区里的一段纯文本：`{ key, start, end, text }`；
+ * 不是「可以整体包起来的一段文字」就返回 null。
+ *
+ * 输入法开始组合时记一次：提交完成时那段文字已经被替换掉了，只有这一刻还读得到原文。
+ */
+export function readTextSelection(root) {
+  const editor = editorOf(root);
+  if (!editor) return null;
+  try {
+    const state = editor._editorState;
+    if (!state) return null;
+    let out = null;
+    const inspect = () => {
+      const selection = state._selection;
+      if (!selection || typeof selection.isCollapsed !== 'function') return;
+      if (selection.isCollapsed() === true) return;
+      if (!isTextOnlySelection(selection)) return;
+      const anchor = selection.anchor;
+      const focus = selection.focus;
+      if (!anchor || !focus || anchor.type !== 'text' || focus.type !== 'text') return;
+      if (anchor.key !== focus.key) return; // 跨节点不包裹，和直接打字时的规则一致
+      const text = selectionText(selection);
+      if (text.length === 0) return;
+      out = {
+        key: anchor.key,
+        start: Math.min(anchor.offset, focus.offset),
+        end: Math.max(anchor.offset, focus.offset),
+        text,
+      };
+    };
     if (typeof state.read === 'function') state.read(inspect);
     else inspect();
     return out;
@@ -604,6 +670,7 @@ export function createAutoPair(win, doc, options = {}) {
     paired: 0, wrapped: 0, skipped: 0, deleted: 0, blocked: 0, errors: 0,
     nested: 0, viaEditor: 0, viaDom: 0,
     imeCommits: 0, imePaired: 0, imeSkippedCloser: 0, imeDuplicate: 0, imeNotSettled: 0,
+    imeWrapped: 0,
   };
   const log = [];
   /** 诊断用的事件流水（最近 24 条）：事后能从磁盘上的报告里还原「到底发生了什么事件」。 */
@@ -621,6 +688,11 @@ export function createAutoPair(win, doc, options = {}) {
   let internal = false;
   let enabled = true;
   let publishTimer = null;
+  /**
+   * 输入法开始组合时，模型里如果选中了一段文字，就把原文记在这里。
+   * 提交完成时那段文字已经被输入法替换掉，只有这一刻还读得到 —— 用它把「替换」改回「包裹」。
+   */
+  let pendingWrap = null;
 
   const report = { version: VERSION, installedAt: new Date().toISOString(), stats, log, enabled: true };
 
@@ -914,6 +986,15 @@ export function createAutoPair(win, doc, options = {}) {
     if (type !== 'insertText' && type !== 'insertReplacementText') {
       // 例：insertCompositionText —— 输入法正在组合，这种事件不可拦截，只能记下来事后处理
       if (pairChar) traceEvent('bi-other', type + ':' + data);
+      // 兜底：有的浏览器先删选区再发 compositionstart，那里就记不到原文了。
+      // beforeinput 在 DOM 变动之前发出，这时模型里通常还留着那段选区。
+      if (pendingWrap === null && type === 'insertCompositionText') {
+        const root = composerOf(event.target);
+        if (root) {
+          pendingWrap = readTextSelection(root);
+          if (pendingWrap) traceEvent('bi-cs', pendingWrap.text.slice(0, 8));
+        }
+      }
       return;
     }
     if (typeof data !== 'string' || charLength(data) !== 1) return;
@@ -1010,8 +1091,19 @@ export function createAutoPair(win, doc, options = {}) {
     doDeletePair();
   }
 
+  function onCompositionStart(event) {
+    if (disposed || !enabled || internal) return;
+    const root = composerOf(event.target);
+    if (!root) return;
+    // 输入法一开始组合，浏览器就会把选中的文字删掉换成它自己的内容 —— 原文只在这一刻还在
+    pendingWrap = readTextSelection(root);
+    if (pendingWrap) traceEvent('cs', pendingWrap.text.slice(0, 8));
+  }
+
   function onCompositionEnd(event) {
     if (disposed || !enabled || internal) return;
+    const wrapSnapshot = pendingWrap;
+    pendingWrap = null;
     const root = composerOf(event.target);
     if (!root) return;
     const data = event.data;
@@ -1069,6 +1161,16 @@ export function createAutoPair(win, doc, options = {}) {
         stats.imeNotSettled += 1;
         traceEvent('ce-stale', last + ' @' + caret.offset + ' …' + caret.text.slice(-4));
         domFallback();
+        return;
+      }
+      if (wrapSnapshot && isOpen
+        && wrapCommittedOpenInEditor(editor, last, index.openToClose.get(last), wrapSnapshot)) {
+        // 输入法把选中的文字替换成了左半边：还原成「包住原文」
+        stats.wrapped += 1;
+        stats.imeWrapped += 1;
+        stats.viaEditor += 1;
+        note('wrap-ime', last);
+        traceEvent('wrap-ime', last);
         return;
       }
       if (isOwnCompletion(root, isOpen ? last : '', closer)) {
@@ -1132,6 +1234,7 @@ export function createAutoPair(win, doc, options = {}) {
   function attach() {
     doc.addEventListener('beforeinput', onBeforeInput, true);
     doc.addEventListener('keydown', onKeyDown, true);
+    doc.addEventListener('compositionstart', onCompositionStart, true);
     doc.addEventListener('compositionend', onCompositionEnd, true);
   }
 
@@ -1139,6 +1242,7 @@ export function createAutoPair(win, doc, options = {}) {
     try {
       doc.removeEventListener('beforeinput', onBeforeInput, true);
       doc.removeEventListener('keydown', onKeyDown, true);
+      doc.removeEventListener('compositionstart', onCompositionStart, true);
       doc.removeEventListener('compositionend', onCompositionEnd, true);
     } catch (error) {
       /* 忽略 */

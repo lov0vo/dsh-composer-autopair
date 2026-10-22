@@ -963,6 +963,108 @@ test('输入法：模型一直没吸收这次提交时，等满 12 帧后走 DOM
   assert.deepEqual(world.state(), { text: '（）', caret: 1, anchor: 1 });
 });
 
+/** 模拟输入法「替换选区」：选中一段文字后按符号，浏览器先删掉选区再插入提交的字符。 */
+function replaceSelectionByIme(world, fake, ch) {
+  const from = Math.min(world.selection.anchor, world.selection.focus);
+  const to = Math.max(world.selection.anchor, world.selection.focus);
+  const chars = Array.from(ch);
+  world.model.splice(from, to - from, ...chars);
+  world.selection.anchor = from + chars.length;
+  world.selection.focus = world.selection.anchor;
+  fake.selection.anchor.offset = world.selection.anchor;
+  fake.selection.focus.offset = world.selection.focus;
+}
+
+test('输入法：选中文字后提交左半边 → 包住原文，而不是把原文替换掉', () => {
+  const world = createWorld();
+  world.model.push('你', '好');
+  world.selection.anchor = 0;
+  world.selection.focus = 2;
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { data: '' });
+  replaceSelectionByIme(world, fake, '（');
+  world.fire('compositionend', { data: '（' });
+  world.flush();
+
+  const after = world.state();
+  assert.equal(after.text, '（你好）', '原文要留在括号里');
+  assert.equal(Math.min(after.anchor, after.caret), 1, '选回原文起点');
+  assert.equal(Math.max(after.anchor, after.caret), 3, '选回原文终点');
+  assert.equal(api.stats.imeWrapped, 1);
+  assert.equal(api.stats.viaEditor, 1);
+});
+
+test('输入法：选中文字后提交半角左半边同样包裹', () => {
+  const world = createWorld();
+  world.model.push('a', 'b');
+  world.selection.anchor = 0;
+  world.selection.focus = 2;
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { data: '' });
+  replaceSelectionByIme(world, fake, '(');
+  world.fire('compositionend', { data: '(' });
+  world.flush();
+
+  assert.equal(world.state().text, '(ab)');
+  assert.equal(api.stats.imeWrapped, 1);
+});
+
+test('输入法：没收到 compositionstart 时，靠 beforeinput 也记得住原文', () => {
+  const world = createWorld();
+  world.model.push('你', '好');
+  world.selection.anchor = 0;
+  world.selection.focus = 2;
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  world.fire('beforeinput', { inputType: 'insertCompositionText', data: '（' });
+  replaceSelectionByIme(world, fake, '（');
+  world.fire('compositionend', { data: '（' });
+  world.flush();
+
+  assert.equal(world.state().text, '（你好）');
+  assert.equal(api.stats.imeWrapped, 1);
+});
+
+test('输入法：没选中文字时提交左半边，仍然只是补一对（不误判成包裹）', () => {
+  const world = createWorld();
+  world.model.push('你', '好');
+  world.selection.anchor = 2;
+  world.selection.focus = 2;
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { data: '' });
+  imeType(world, fake, '（');
+  world.fire('compositionend', { data: '（' });
+  world.flush();
+
+  assert.deepEqual(world.state(), { text: '你好（）', caret: 3, anchor: 3 });
+  assert.equal(api.stats.imeWrapped, 0);
+  assert.equal(api.stats.imePaired, 1);
+});
+
+test('输入法：选中文字后提交普通字符，不插手（保持浏览器默认的替换）', () => {
+  const world = createWorld();
+  world.model.push('你', '好');
+  world.selection.anchor = 0;
+  world.selection.focus = 2;
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { data: '' });
+  replaceSelectionByIme(world, fake, '啊');
+  world.fire('compositionend', { data: '啊' });
+  world.flush();
+
+  assert.equal(world.state().text, '啊');
+  assert.equal(api.stats.imeWrapped, 0);
+});
+
 test('诊断：trace 记下输入法提交的字符与处理结果，便于事后从磁盘上的报告还原现场', () => {
   const world = createWorld();
   const fake = attachFakeEditor(world);

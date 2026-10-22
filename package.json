@@ -1,6 +1,6 @@
 {
   "name": "dsh-composer-autopair",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "DSH 聊天输入框自动配对：输入左半边自动补右半边、光标停在中间（半角+全角；退格删空对、选中文字包裹、兼容输入法提交与引号嵌套）。Auto-pair brackets and quotes in the DeepSeek Harness chat composer.",
   "license": "MIT",
   "type": "module",
