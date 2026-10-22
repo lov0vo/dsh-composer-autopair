@@ -169,7 +169,7 @@ cordis.patch.yml        loader entry used by bundle-style installs
 ```
 
 ```bash
-node --test src/autopair.test.mjs src/deploy.test.mjs   # run all 63 tests
+node --test src/autopair.test.mjs src/deploy.test.mjs   # run all 65 tests
 node build.mjs                      # rebuild lib/client.js
 node deploy.mjs                     # install into the profile
 ```

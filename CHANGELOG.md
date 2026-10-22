@@ -4,6 +4,22 @@
 All notable changes to this plugin. Package versions map to the internal revisions the same way:
 `0.x.0` ↔ internal `vx`.
 
+## 0.5.3 — 2026-10-22（内部 v8）
+
+**修 0.5.2：真实编辑器里「选中文字再按符号」仍然被替换 —— 判据用了会被重建的节点身份。**
+Fix for 0.5.2: the wrap still did not fire in the real editor, because the guard compared node
+identity that Lexical re-creates.
+
+- 现场证据（报告 trace）：`cs` 记到了原文（`少时诵诗书少时诵`）、`ce` 收到 `（`，随后却是 `pair`
+  而不是 `wrap-ime` —— 说明捕获成功、改写被守卫挡掉了。
+- 根因：`wrapCommittedOpenInEditor` 要求「提交后的文本节点 key 与组合开始时一致，且偏移等于
+  `起点 + 符号长度`」。Lexical 删掉选区时会把文本节点**拆开重建**，key 已经变了；偏移也随节点
+  切分而失效。于是守卫永远不通过，落到原来的「补一对」分支。
+- 修法：判据只留「光标左边紧挨着刚提交的那个符号」；另加一条防守——原文还紧挨在符号左边时说明
+  选区没被替换，直接放弃，避免把文字复制两遍。失败原因记进 trace（`wrap-miss`: `no-caret` /
+  `no-char` / `not-replaced` / `no-writer` / `no-range`），下次出问题能一眼定位。
+- 单测 63 → 65（新增：节点 key 被重建仍要包裹；原文没被替换时不重复塞一遍）。
+
 ## 0.5.2 — 2026-10-22（内部 v7）
 
 **中文输入法下选中一段文字再按符号，不再把原文替换掉，而是包住原文。**

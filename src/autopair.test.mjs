@@ -1030,6 +1030,47 @@ test('输入法：没收到 compositionstart 时，靠 beforeinput 也记得住�
   assert.equal(api.stats.imeWrapped, 1);
 });
 
+test('输入法：Lexical 替换选区时重建了文本节点（key 变了）也要包住原文', () => {
+  const world = createWorld();
+  world.model.push('你', '好');
+  world.selection.anchor = 0;
+  world.selection.focus = 2;
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { data: '' });
+  fake.node.__key = 'n2'; // 真实 Lexical 删掉选区时会把文本节点拆开重建，key 就变了
+  replaceSelectionByIme(world, fake, '（');
+  world.fire('compositionend', { data: '（' });
+  world.flush();
+
+  assert.equal(world.state().text, '（你好）');
+  assert.equal(api.stats.imeWrapped, 1);
+});
+
+test('输入法：原文其实没被替换时不要把它重复塞一遍（防守用例）', () => {
+  const world = createWorld();
+  world.model.push('你', '好');
+  world.selection.anchor = 0;
+  world.selection.focus = 2;
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { data: '' });
+  // 选区没被删掉：文字还在，只是后面多了一个（
+  world.selection.anchor = 2;
+  world.selection.focus = 2;
+  fake.selection.anchor.offset = 2;
+  fake.selection.focus.offset = 2;
+  imeType(world, fake, '（');
+  world.fire('compositionend', { data: '（' });
+  world.flush();
+
+  assert.equal(world.state().text, '你好（）', '原文不能出现两遍');
+  assert.equal(api.stats.imeWrapped, 0);
+  assert.ok(api.trace.some((entry) => entry.kind === 'wrap-miss'));
+});
+
 test('输入法：没选中文字时提交左半边，仍然只是补一对（不误判成包裹）', () => {
   const world = createWorld();
   world.model.push('你', '好');
