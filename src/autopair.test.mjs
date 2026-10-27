@@ -11,6 +11,8 @@ import {
   planInsert,
   planBackspace,
   planFromSelection,
+  planTextareaEdit,
+  planTextareaIme,
   isPlainTextRange,
   installAutoPair,
   createAutoPair,
@@ -99,6 +101,7 @@ test('isPlainTextRange: 文本节点 + 无 chip 才返回 true', () => {
 function createWorld({ deferInsert = false } = {}) {
   const model = [];
   const frames = [];
+  const timers = [];
 
   const win = {
     localStorage: {
@@ -106,7 +109,7 @@ function createWorld({ deferInsert = false } = {}) {
       getItem(key) { return this.store.has(key) ? this.store.get(key) : null; },
       setItem(key, value) { this.store.set(key, String(value)); },
     },
-    setTimeout() { return 0; },
+    setTimeout(fn) { timers.push(fn); return timers.length; },
     requestAnimationFrame(fn) { frames.push(fn); return frames.length; },
     Event: class Event { constructor(type) { this.type = type; } },
   };
@@ -220,7 +223,12 @@ function createWorld({ deferInsert = false } = {}) {
     }
   }
 
-  return { win, doc, root, model, selection, fire, flush, listeners,
+  function runTimers() {
+    const list = timers.splice(0);
+    for (const fn of list) fn();
+  }
+
+  return { win, doc, root, model, selection, fire, flush, runTimers, listeners,
     state: () => ({ text: model.join(''), caret: selection.focus, anchor: selection.anchor }) };
 }
 
@@ -1119,4 +1127,189 @@ test('诊断：trace 记下输入法提交的字符与处理结果，便于事�
   assert.ok(kinds.includes('ce'), '要记下 compositionend');
   assert.ok(kinds.includes('pair'), '要记下处理结果');
   assert.equal(api.trace.find((entry) => entry.kind === 'ce').d, '“');
+});
+
+// ------------------------------------------------- textarea（问答卡片）纯逻辑
+
+const taIndex = createPairIndex();
+
+test('textarea 纯逻辑：左半边补右半边，光标落在中间', () => {
+  const edit = planTextareaEdit({ value: 'ab', start: 2, end: 2, data: '（' }, taIndex);
+  assert.equal(edit.kind, 'pair');
+  assert.equal(edit.text, '（）');
+  assert.equal(edit.selStart, 3);
+  assert.equal(edit.selEnd, 3);
+});
+
+test('textarea 纯逻辑：选中文字再输入左半边 → 包住原文并选回原文', () => {
+  const edit = planTextareaEdit({ value: '你好', start: 0, end: 2, data: '(' }, taIndex);
+  assert.equal(edit.kind, 'wrap');
+  assert.equal(edit.text, '(你好)');
+  assert.equal(edit.selStart, 1);
+  assert.equal(edit.selEnd, 3);
+});
+
+test('textarea 纯逻辑：右半边已经在右边 → 只是把光标挪过去', () => {
+  const edit = planTextareaEdit({ value: '()', start: 1, end: 1, data: ')' }, taIndex);
+  assert.equal(edit.kind, 'skip');
+  assert.equal(edit.text, '');
+  assert.equal(edit.selStart, 2);
+});
+
+test('textarea 纯逻辑：空引号对中间再按引号键 → 再嵌一对', () => {
+  const edit = planTextareaEdit({ value: '“”', start: 1, end: 1, data: '”' }, taIndex);
+  assert.equal(edit.kind, 'nest');
+  assert.equal(edit.text, '“”');
+  assert.equal(edit.selStart, 2);
+});
+
+test('textarea 纯逻辑：退格删掉一对空的括号', () => {
+  const edit = planTextareaEdit({ value: '（）', start: 1, end: 1, data: null }, taIndex);
+  assert.equal(edit.kind, 'deletePair');
+  assert.equal(edit.start, 0);
+  assert.equal(edit.end, 2);
+  assert.equal(edit.selStart, 0);
+});
+
+test('textarea 纯逻辑：普通字符与有内容的括号对都不插手', () => {
+  assert.equal(planTextareaEdit({ value: 'a', start: 1, end: 1, data: 'b' }, taIndex), null);
+  assert.equal(planTextareaEdit({ value: '（x）', start: 2, end: 2, data: null }, taIndex), null);
+});
+
+test('textarea 纯逻辑：输入法提交左半边 → 补右半边', () => {
+  const edit = planTextareaIme({ value: '（', caret: 1, data: '（', snapshot: null }, taIndex);
+  assert.equal(edit.kind, 'pair');
+  assert.equal(edit.text, '（）');
+  assert.equal(edit.selStart, 1);
+});
+
+test('textarea 纯逻辑：输入法把选中的原文替换掉 → 还原成包裹', () => {
+  const edit = planTextareaIme({ value: '（', caret: 1, data: '（', snapshot: { text: '你好' } }, taIndex);
+  assert.equal(edit.kind, 'wrap');
+  assert.equal(edit.text, '（你好）');
+  assert.equal(edit.selStart, 1);
+  assert.equal(edit.selEnd, 3);
+});
+
+test('textarea 纯逻辑：原文其实没被替换时不要重复塞一遍', () => {
+  const edit = planTextareaIme({ value: '你好（', caret: 3, data: '（', snapshot: { text: '你好' } }, taIndex);
+  assert.equal(edit, null);
+});
+
+// ------------------------------------------------- textarea 端到端（假 textarea）
+
+function createFakeTextarea({ value = '', className = 'QOsGLa_fieldInput' } = {}) {
+  const parent = {
+    nodeType: 1,
+    querySelector: (selector) => (String(selector).indexOf('aria-hidden') >= 0 ? { nodeType: 1 } : null),
+  };
+  const el = {
+    nodeType: 1,
+    tagName: 'TEXTAREA',
+    value,
+    selectionStart: value.length,
+    selectionEnd: value.length,
+    className,
+    disabled: false,
+    readOnly: false,
+    parentElement: parent,
+    inputs: [],
+    setRangeText(text, start, end) {
+      this.value = this.value.slice(0, start) + text + this.value.slice(end);
+      this.selectionStart = start + text.length;
+      this.selectionEnd = this.selectionStart;
+    },
+    dispatchEvent(evt) { this.inputs.push(evt); return true; },
+  };
+  return el;
+}
+
+test('问答卡片的 textarea：直接输入 ( 也补成一对，并通知受控组件', () => {
+  const world = createWorld();
+  const area = createFakeTextarea();
+  installAutoPair(world.win, world.doc);
+
+  const event = world.fire('beforeinput', { inputType: 'insertText', data: '(', target: area });
+
+  assert.equal(event.defaultPrevented, true, '要拦下浏览器的默认插入');
+  assert.equal(area.value, '()');
+  assert.equal(area.selectionStart, 1);
+  assert.equal(area.inputs.length, 1, '受控组件要靠 input 事件才知道值变了');
+  assert.equal(area.inputs[0].type, 'input');
+});
+
+test('问答卡片的 textarea：选中文字再输入（ 包住原文', () => {
+  const world = createWorld();
+  const area = createFakeTextarea({ value: '你好' });
+  area.selectionStart = 0;
+  area.selectionEnd = 2;
+  installAutoPair(world.win, world.doc);
+
+  world.fire('beforeinput', { inputType: 'insertText', data: '（', target: area });
+
+  assert.equal(area.value, '（你好）');
+  assert.equal(area.selectionStart, 1);
+  assert.equal(area.selectionEnd, 3);
+});
+
+test('问答卡片的 textarea：退格一次删掉空的一对', () => {
+  const world = createWorld();
+  const area = createFakeTextarea({ value: '（）' });
+  area.selectionStart = 1;
+  area.selectionEnd = 1;
+  installAutoPair(world.win, world.doc);
+
+  const event = world.fire('keydown', { key: 'Backspace', keyCode: 8, target: area });
+
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(area.value, '');
+  assert.equal(area.selectionStart, 0);
+});
+
+test('问答卡片的 textarea：输入法提交（ 也补右半边', () => {
+  const world = createWorld();
+  const area = createFakeTextarea();
+  installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { target: area });
+  area.value = '（';
+  area.selectionStart = 1;
+  area.selectionEnd = 1;
+  world.fire('compositionend', { data: '（', target: area });
+  world.runTimers();
+
+  assert.equal(area.value, '（）');
+  assert.equal(area.selectionStart, 1);
+});
+
+test('问答卡片的 textarea：输入法把选中的文字替换掉时改回包裹', () => {
+  const world = createWorld();
+  const area = createFakeTextarea({ value: '你好' });
+  area.selectionStart = 0;
+  area.selectionEnd = 2;
+  installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { target: area });
+  area.value = '（'; // 输入法把选中的原文替换成了提交的字符
+  area.selectionStart = 1;
+  area.selectionEnd = 1;
+  world.fire('compositionend', { data: '（', target: area });
+  world.runTimers();
+
+  assert.equal(area.value, '（你好）');
+  assert.equal(area.selectionStart, 1);
+  assert.equal(area.selectionEnd, 3);
+});
+
+test('别的 textarea（终端、命令面板）一律不插手', () => {
+  const world = createWorld();
+  const area = createFakeTextarea({ className: 'xterm-helper-textarea' });
+  area.parentElement.querySelector = () => null;
+  installAutoPair(world.win, world.doc);
+
+  const event = world.fire('beforeinput', { inputType: 'insertText', data: '(', target: area });
+
+  assert.equal(event.defaultPrevented, false);
+  assert.equal(area.value, '');
+  assert.equal(area.inputs.length, 0);
 });

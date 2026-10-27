@@ -16,6 +16,7 @@
 | 在 `()` 中间按一次退格 | 两个一起删掉 |
 | 中文输入法直接提交 `（` | 同样补上右半边 |
 | 输入法手动提交右半边 `）`、而右边已经有 `）` | 越过它，不会变成 `（））` |
+| **DSH 问答卡片里的输入框**（`AskUserQuestion` 那种 `<textarea>`） | 上面这些行为全都一样生效 |
 
 配对表（17 组，半角 + 全角）：
 
@@ -25,6 +26,8 @@
 ```
 
 **不管的事**：设置页的输入框、终端、右侧栏编辑器、文件树一律不碰；输入法正在组字（composition）时不插手。
+
+问答卡片的输入框是个普通 `<textarea>`（不是 Lexical），插件靠「旁边有 `aria-hidden` 镜像 div」或「类名带 `fieldInput`」认出它；本机还有别的 textarea 想纳入时，往 localStorage 的 `dsh-composer-autopair:textareas` 里写逗号分隔的选择器即可。
 
 ## 安装
 
@@ -142,7 +145,7 @@ node tools/read-report.mjs "<leveldb 目录>"  # 自定义路径
 
 ```
 src/autopair.mjs        唯一真源：配对表、纯逻辑、Lexical 适配、插件入口 apply(ctx)
-src/autopair.test.mjs   单测（57 个用例：纯逻辑 + 迷你 DOM 全链路 + 假 Lexical 模型层）
+src/autopair.test.mjs   单测（72 个用例：纯逻辑 + 迷你 DOM 全链路 + 假 Lexical 模型层 + 假 textarea）
 src/deploy.test.mjs     安装器单测（8 个用例：块摘除 / 路线选择 / 两条路线 / --check / 卸载）
 build.mjs               由 src 生成 lib/client.js（DSH 客户端 bundle 形状）
 deploy.mjs              安装 / 卸载（自动选择 Loader 挂载方式）
@@ -153,7 +156,7 @@ cordis.patch.yml        bundle 式安装用的 Loader 条目声明
 ```
 
 ```bash
-node --test src/autopair.test.mjs src/deploy.test.mjs   # 跑单测（65 个）
+node --test src/autopair.test.mjs src/deploy.test.mjs   # 跑单测（80 个）
 node build.mjs                      # 生成 lib/client.js
 node deploy.mjs                     # 装进 profile
 ```

@@ -4,6 +4,25 @@
 All notable changes to this plugin. Package versions map to the internal revisions the same way:
 `0.x.0` ↔ internal `vx`.
 
+## 0.6.0 — 2026-10-27（内部 v9）
+
+**新：DSH 问答卡片里的输入框也支持配对。**
+New: auto-pair now works inside the DSH question card's composer.
+
+- 场景：`AskUserQuestion` 那种问答卡片（标题 + 说明 + 输入框 + 跳过/下一题）里的输入框是个普通
+  `<textarea>`（React 受控组件），既不是 contenteditable 也不是 Lexical —— 之前完全不在插件的
+  作用范围内，所以在那里打括号不会配对。
+- 认人方式（只认问答类，别的 textarea 一律不碰）：输入框旁边有个 `aria-hidden="true"` 的等高镜像
+  `<div>`，或类名里带 `fieldInput`；本机想再加别的输入框，往 localStorage 的
+  `dsh-composer-autopair:textareas` 写逗号分隔的选择器即可。
+- 实现：新增纯函数 `planTextareaEdit`（复用 `planInsert`/`planBackspace`）与 `planTextareaIme`；
+  写入走 `setRangeText` + 手动设选区 + 自己发一个 `input` 事件（受控组件靠它同步 state）。
+- 覆盖：直接打字配对 / 选中文字包裹 / 右半边越过 / 空引号对再嵌一对 / 退格删空对 / 中文输入法提交
+  补右半边 / 输入法替换选区时改回包裹（`compositionstart` 先记原文，`compositionend` 后 `setTimeout 0`
+  再处理，因为 `insertCompositionText` 不可拦截）。
+- 诊断：新增 `stats.viaTextarea`、`caps.answerTextareas`，trace 记 `ta-*`。
+- 单测 65 → 80（含假 textarea 的端到端用例与「别的 textarea 不插手」用例）。
+
 ## 0.5.3 — 2026-10-22（内部 v8）
 
 **修 0.5.2：真实编辑器里「选中文字再按符号」仍然被替换 —— 判据用了会被重建的节点身份。**

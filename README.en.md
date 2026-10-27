@@ -17,6 +17,7 @@
 | Backspace inside an empty `()` | Deletes both characters at once |
 | A Chinese IME committing `（` | The matching `）` is appended too |
 | A Chinese IME committing `）` when a `）` already follows | Skips over it — no `（））` |
+| **The composer inside a DSH question card** (`AskUserQuestion`-style `<textarea>`) | Everything above works there too |
 
 Pair table (17 pairs, ASCII + full-width):
 
@@ -27,6 +28,11 @@ Pair table (17 pairs, ASCII + full-width):
 
 **Deliberately out of scope**: settings inputs, the terminal, the right-sidebar editor and the file tree are
 never touched, and nothing happens while an IME composition is in progress.
+
+That question-card input is a plain `<textarea>` (not Lexical). The plugin recognises it by the
+`aria-hidden` mirror `<div>` next to it or by `fieldInput` in its class name; to cover another textarea on
+your machine, put a comma-separated list of selectors into the `dsh-composer-autopair:textareas`
+localStorage key.
 
 ## Install
 
@@ -169,7 +175,7 @@ cordis.patch.yml        loader entry used by bundle-style installs
 ```
 
 ```bash
-node --test src/autopair.test.mjs src/deploy.test.mjs   # run all 65 tests
+node --test src/autopair.test.mjs src/deploy.test.mjs   # run all 80 tests
 node build.mjs                      # rebuild lib/client.js
 node deploy.mjs                     # install into the profile
 ```
