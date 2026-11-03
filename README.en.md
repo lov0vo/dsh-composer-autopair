@@ -140,14 +140,25 @@ Counters worth watching:
    half was committed. Our own appended closing half is recognised by a fingerprint record (text node
    key + caret offset + both halves + timestamp), so a duplicate `compositionend` cannot
    double-insert, and "delete the pair, then type the same opening half in the same spot" is not
-   misread as a duplicate. If the model never settles the plugin does nothing at all (recording
-   `imeNotSettled`) rather than risk deleting what the IME just committed.
+   misread as a duplicate. If the model never settles (or the model caret cannot be read at all), the
+   plugin switches to the DOM fallback (recording `imeNotSettled` + `ce-nocaret` / `ce-stale`) instead
+   of leaving the commit unpaired, and never deletes what the IME just committed.
 5. **Quotes get their own rule.** After an opening quote, a Chinese IME only produces the closing
    quote, so "inside an *empty* pair" nests another pair, while "pair already has content" still skips
    over. And a committed closing quote with **no** unmatched opening quote to its left (the caret
    sitting after a pair that already has content is the typical case) is rewritten into a fresh pair,
    so quotes always end up paired. Brackets are unaffected.
-6. **Idempotent and disposable.** `installAutoPair` disposes the previous instance; the plugin entry
+6. **With a selection, either half wraps.** When an IME commits a symbol it first deletes the selection
+   and then inserts the character, so the original text is already gone by the time `compositionend`
+   arrives. `compositionstart` therefore records the text first, and after the commit the plugin
+   rebuilds `open + text + close` around the symbol immediately left of the caret. Closing halves
+   (`”`, `）`) are handled the same way — `wrapPairFor()` looks up their opening half, so a selected
+   word is never replaced by a lone closing quote.
+7. **One Ctrl+Z undoes the whole pair.** Every model-layer update on the IME path carries
+   `{ tag: ['history-merge'] }`, so Lexical folds it into the history entry created by the IME commit
+   and a single undo rolls back both symbols (and the wrapped text). The direct-typing path
+   (`beforeinput`) does not use that tag, keeping step-by-step undo.
+8. **Idempotent and disposable.** `installAutoPair` disposes the previous instance; the plugin entry
    registers cleanup through `ctx.effect`, so disabling or hot-reloading removes the listeners.
 
 ## Known limits
@@ -164,7 +175,7 @@ Counters worth watching:
 
 ```
 src/autopair.mjs        single source of truth: pair table, pure logic, Lexical adapter, apply(ctx)
-src/autopair.test.mjs   47 tests: pure logic + full flow on a mini DOM + a fake Lexical editor
+src/autopair.test.mjs   80 tests: pure logic + full flow on a mini DOM + a fake Lexical editor + a fake textarea
 src/deploy.test.mjs     8 installer tests: block stripping, route choice, both routes, --check, uninstall
 build.mjs               renders src into lib/client.js (the DSH client bundle shape)
 deploy.mjs              install / uninstall (picks the loader mounting route automatically)
@@ -175,7 +186,7 @@ cordis.patch.yml        loader entry used by bundle-style installs
 ```
 
 ```bash
-node --test src/autopair.test.mjs src/deploy.test.mjs   # run all 80 tests
+node --test src/autopair.test.mjs src/deploy.test.mjs   # run all 88 tests
 node build.mjs                      # rebuild lib/client.js
 node deploy.mjs                     # install into the profile
 ```
@@ -199,6 +210,8 @@ Recent versions:
 
 | Version | Internal | In one line |
 | --- | --- | --- |
+| 0.6.1 | v10 | With a selection, either half (`”`, `）`) wraps it; one Ctrl+Z undoes the whole pair |
+| 0.6.0 | v9 | The question card's plain textarea pairs too |
 | 0.5.3 | v8 | Wrapping a selection no longer relies on node identity that Lexical re-creates (0.5.2 did not fire in the real editor) |
 | 0.5.2 | v7 | With a Chinese IME, typing a symbol over a selection wraps it instead of replacing it |
 | 0.5.1 | v6 | Fixes a 0.5.0 regression: no more "nothing is paired" when the model caret is unreadable |

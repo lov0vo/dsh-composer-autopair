@@ -15,7 +15,7 @@
  *     Lexical 自行把 DOM 选区同步回模型；不需要碰 Lexical 内部 API。
  */
 
-export const VERSION = 'v9';
+export const VERSION = 'v10';
 export const STORAGE_PREFIX = 'dsh-composer-autopair';
 export const COMPOSER_SELECTOR = '[data-composer-input]';
 
@@ -73,6 +73,31 @@ export function quoteOpenerFor(index, close) {
   return null;
 }
 
+/**
+ * 找出某个右半边对应的左半边：先按引号规则，再按配对表反查（`）` → `（`）。
+ * 用在「输入法只提交了右半边」的场景：中文输入法在已经有引号的状态下按引号键，
+ * 给的是右引号 —— 这时要补的是左边那一半，得先知道它是什么。
+ */
+export function openerForClose(index, close) {
+  const quoteOpen = quoteOpenerFor(index, close);
+  if (quoteOpen !== null) return quoteOpen;
+  for (const [open, mapped] of index.openToClose) {
+    if (mapped === close) return open;
+  }
+  return null;
+}
+
+/** 输入法提交的这个字符应该配成哪一对：`（` → `（）`，`”` → `“”`；不是配对字符就返回 null。 */
+export function wrapPairFor(index, ch) {
+  const close = index.openToClose.get(ch);
+  if (close !== undefined) return { open: ch, close };
+  if (index.closers.has(ch)) {
+    const open = openerForClose(index, ch);
+    if (open !== null) return { open, close: ch };
+  }
+  return null;
+}
+
 /** 光标是否正好夹在一对**空**引号中间：左侧是 open、右侧是 close。 */
 export function isEmptyQuotePair(text, offset, open, close) {
   if (typeof text !== 'string') return false;
@@ -97,7 +122,11 @@ export function planInsert(data, state, index) {
     return { kind: 'pair', open: data, close };
   }
   if (index.closers.has(data)) {
-    if (!collapsed) return null;
+    if (!collapsed) {
+      // 有选区时按了右半边（中文输入法常常只给右半边）：照样包住，别把选中的文字吃掉
+      const open = openerForClose(index, data);
+      return textSelection && open !== null ? { kind: 'wrap', open, close: data } : null;
+    }
     // 一对空引号中间再按引号键（输入法只会给右半边）→ 再嵌一对，而不是跳过去
     const quoteOpen = quoteOpenerFor(index, data);
     if (quoteOpen !== null && charBefore === quoteOpen && charAfter === data) {
@@ -270,10 +299,20 @@ export function editorDiagnostics() {
   return { lastError: editorLastError };
 }
 
-/** 在模型层跑一次 update，回调拿到 pending EditorState 的 selection（= Lexical 的 $getSelection()）。 */
-function withEditorSelection(editor, run) {
+/**
+ * 在模型层跑一次 update，回调拿到 pending EditorState 的 selection（= Lexical 的 $getSelection()）。
+ *
+ * `tags` 会原样传给 `editor.update(fn, { tag })`。这里只有一个标签有意义：`history-merge`
+ * 让这次改动**并进上一条历史记录**，而不是新开一条 —— 输入法那条路径必须用它：
+ * 中文输入法提交的 `（` 是浏览器自己插进去的（一条历史记录），我们补的 `）` 是第二次
+ * update（默认会再开一条），于是 Ctrl+Z 一次只撤掉右半边、左半边留在正文里。
+ * 打上 history-merge 后两次改动合成一条，Ctrl+Z 一次就把整对撤掉。
+ * 直接打字那条路径**不能**打这个标签：那是我们自己一次性插进去的整对，本来就只有一条。
+ */
+function withEditorSelection(editor, run, tags) {
   if (!editor || typeof editor.update !== 'function') return false;
   let ok = false;
+  const options = tags ? { tag: tags } : undefined;
   try {
     editor.update(() => {
       // 回调内部自己兜错：绝不让异常穿出 editor.update()，否则 Lexical 可能卡在 updating 状态
@@ -286,13 +325,16 @@ function withEditorSelection(editor, run) {
         editorLastError = String((error && error.message) || error).slice(0, 200);
         ok = false;
       }
-    });
+    }, options);
   } catch (error) {
     editorLastError = String((error && error.message) || error).slice(0, 200);
     return false;
   }
   return ok;
 }
+
+/** 输入法路径统一用这个标签：把「补的右半边」并进输入法提交的那条历史记录。 */
+const IME_HISTORY_TAGS = ['history-merge'];
 
 /** 光标所在文本点：{ node, text, offset }；不是文本点就返回 null。 */
 function caretPoint(selection) {
@@ -337,6 +379,12 @@ function setRangeOnNode(selection, node, start, end) {
  *  · 允许出现段落/列表这类元素节点（Lexical 的 getNodes 会把它们带进来）；
  *  · 出现装饰节点（@ 引用 chip、图片等没有 getChildren 的叶子）就拒绝，别把 chip 删掉；
  *  · 选区跨段落也拒绝（把整段文字塞进一个文本节点会打乱结构）。
+ *
+ * 注意「同一个父节点」**不能**作为判据：Lexical 编辑过程中会不停把文本节点拆开重建，
+ * 一段普通文字里只要有一段带格式（或光标刚动过），选区的首尾就落在两个不同的文本节点上。
+ * 早期版本按父节点比对，于是「选中一段文字再打括号」会时灵时不灵 —— 灵的时候父节点相同，
+ * 不灵的时候父节点不同，直接退化成浏览器默认行为（把选中的文字替换成括号）。
+ * 现在改成按**顶层块**（段落 / 列表项）比对：只要在同一段里就允许包裹。
  */
 function isTextOnlySelection(selection) {
   if (!selection || typeof selection.getNodes !== 'function') return false;
@@ -356,18 +404,25 @@ function isTextOnlySelection(selection) {
   try {
     const first = selection.anchor.getNode();
     const last = selection.focus.getNode();
-    if (
-      first && last
-      && typeof first.getParent === 'function'
-      && typeof last.getParent === 'function'
-      && first.getParent() !== last.getParent()
-    ) {
-      return false;
-    }
+    if (!first || !last) return false;
+    if (blockAncestor(first) !== blockAncestor(last)) return false;
   } catch (error) {
     return false;
   }
   return true;
+}
+
+/** 往上走到「顶层块」：根节点下面的那一个（段落 / 列表项 / 引用块）。 */
+function blockAncestor(node) {
+  let current = node;
+  for (let i = 0; i < 64 && current; i += 1) {
+    const parent = typeof current.getParent === 'function' ? current.getParent() : null;
+    if (!parent) return current;
+    const type = typeof parent.getType === 'function' ? parent.getType() : null;
+    if (type === 'root' || type === null) return current;
+    current = parent;
+  }
+  return current;
 }
 
 /** 选区里的纯文本。 */
@@ -391,6 +446,12 @@ export function planFromSelection(selection, data, index) {
     if (collapsed) return { kind: 'pair', open: data, close };
     if (isTextOnlySelection(selection)) return { kind: 'wrap', open: data, close };
     return null; // 选区里有 chip 之类，交给编辑器默认行为
+  }
+  if (!collapsed && index.closers.has(data)) {
+    // 有选区时按了右半边：包住原文，而不是把它替换掉
+    const open = openerForClose(index, data);
+    if (open !== null && isTextOnlySelection(selection)) return { kind: 'wrap', open, close: data };
+    return null;
   }
   if (collapsed && index.closers.has(data)) {
     const ctx = caretPoint(selection);
@@ -450,7 +511,7 @@ export function nestQuoteInEditor(editor, open, close) {
     else if (typeof ctx.node.spliceText === 'function') ctx.node.spliceText(start, closeLen, open + close);
     else return false;
     return setCaretOnNode(selection, ctx.node, start + openLen);
-  });
+  }, IME_HISTORY_TAGS);
 }
 
 /** 用符号把选中的文字包起来，并选回原文（模型层）。 */
@@ -470,18 +531,29 @@ export function wrapInEditor(editor, open, close) {
 }
 
 /**
- * 输入法把选中的文字**替换**成了左半边：用组合开始前记下的原文把这一对补回去 ——
- * 把光标左边那个刚提交的 `open` 改写成 `open + 原文 + close`，并把原文重新选中
+ * 输入法把选中的文字**替换**成了左半边或右半边：用组合开始前记下的原文把这一对补回去 ——
+ * 把光标左边那个刚提交的符号改写成 `open + 原文 + close`，并把原文重新选中
  * （与直接打字时的「包裹」表现一致）。
+ *
+ * `committed` 是**输入法实际提交的那个字符**，不一定是左半边：中文输入法在已经有引号的
+ * 状态下按引号键，给的是右引号 `”`。早期版本只认左半边，于是「选中文字 + 按引号键」
+ * 有一半的概率变成「把选中的文字替换成一个右引号」（右引号落到 `pairUpCommittedCloser`
+ * 那条路上，原文已经没了）—— 这就是「有概率直接替换」的真正原因。
  *
  * 判据只看「光标左边紧挨着的就是刚提交的那个符号」——**不能**拿节点 key 或偏移去比对：
  * Lexical 在替换选区时会把文本节点拆开重建，提交后的节点 key 跟组合开始时那个已经不是同一个。
  *
+ * 更新带 `history-merge`：把这次改写并进输入法提交的那条历史记录，
+ * Ctrl+Z 一次就能把「符号 + 原文」整体撤掉。
+ *
  * @returns {ok:true} | {ok:false, reason:string}
  */
-export function wrapCommittedOpenInEditor(editor, open, close, snapshot) {
+export function wrapCommittedSymbolInEditor(editor, committed, open, close, snapshot) {
   if (!snapshot || typeof snapshot.text !== 'string' || snapshot.text.length === 0) {
     return { ok: false, reason: 'no-snapshot' };
+  }
+  if (typeof committed !== 'string' || committed.length === 0) {
+    return { ok: false, reason: 'no-char' };
   }
   let reason = 'ok';
   const done = withEditorSelection(editor, (selection) => {
@@ -490,12 +562,12 @@ export function wrapCommittedOpenInEditor(editor, open, close, snapshot) {
       reason = 'no-caret';
       return false;
     }
-    const openLen = open.length;
-    if (ctx.text.slice(ctx.offset - openLen, ctx.offset) !== open) {
+    const committedLen = committed.length;
+    if (ctx.text.slice(ctx.offset - committedLen, ctx.offset) !== committed) {
       reason = 'no-char'; // 提交的符号不在光标左边
       return false;
     }
-    const start = ctx.offset - openLen;
+    const start = ctx.offset - committedLen;
     // 原文还紧挨在符号左边 → 选区其实没被替换掉，别把文字再复制一遍
     if (start >= snapshot.text.length
       && ctx.text.slice(start - snapshot.text.length, start) === snapshot.text) {
@@ -505,19 +577,24 @@ export function wrapCommittedOpenInEditor(editor, open, close, snapshot) {
     const replacement = open + snapshot.text + close;
     const next = ctx.text.slice(0, start) + replacement + ctx.text.slice(ctx.offset);
     if (typeof ctx.node.setTextContent === 'function') ctx.node.setTextContent(next);
-    else if (typeof ctx.node.spliceText === 'function') ctx.node.spliceText(start, openLen, replacement);
+    else if (typeof ctx.node.spliceText === 'function') ctx.node.spliceText(start, committedLen, replacement);
     else {
       reason = 'no-writer';
       return false;
     }
-    const innerEnd = start + openLen + snapshot.text.length;
+    const innerEnd = start + open.length + snapshot.text.length;
     if (!setRangeOnNode(selection, ctx.node, innerEnd - snapshot.text.length, innerEnd)) {
       reason = 'no-range';
       return false;
     }
     return true;
-  });
+  }, IME_HISTORY_TAGS);
   return done ? { ok: true } : { ok: false, reason };
+}
+
+/** 兼容旧签名：提交的是左半边时等价于 `wrapCommittedSymbolInEditor(editor, open, open, close, snapshot)`。 */
+export function wrapCommittedOpenInEditor(editor, open, close, snapshot) {
+  return wrapCommittedSymbolInEditor(editor, open, open, close, snapshot);
 }
 
 /** 已有右半边时再打一次右半边 → 光标跳过它（模型层）。 */
@@ -616,7 +693,7 @@ export function readTextSelection(root) {
       const anchor = selection.anchor;
       const focus = selection.focus;
       if (!anchor || !focus || anchor.type !== 'text' || focus.type !== 'text') return;
-      if (anchor.key !== focus.key) return; // 跨节点不包裹，和直接打字时的规则一致
+      // 首尾可以在不同的文本节点上（Lexical 会把文本拆开重建），只要原文连起来还是一段文字
       const text = selectionText(selection);
       if (text.length === 0) return;
       out = {
@@ -653,7 +730,7 @@ export function appendCloseInEditor(editor, close, open) {
       at: Date.now(),
     };
     return true;
-  });
+  }, IME_HISTORY_TAGS);
   if (ok && record !== null) lastAppend = record;
   return ok;
 }
@@ -674,7 +751,7 @@ export function skipCommittedCloserInEditor(editor, close) {
     else if (typeof ctx.node.spliceText === 'function') ctx.node.spliceText(ctx.offset - len, len, '');
     else return false;
     return setCaretOnNode(selection, ctx.node, ctx.offset);
-  });
+  }, IME_HISTORY_TAGS);
 }
 
 /**
@@ -727,7 +804,7 @@ export function pairUpCommittedCloserInEditor(editor, open, close) {
     else if (typeof ctx.node.spliceText === 'function') ctx.node.spliceText(ctx.offset - len, len, open + close);
     else return false;
     return setCaretOnNode(selection, ctx.node, ctx.offset - len + open.length);
-  });
+  }, IME_HISTORY_TAGS);
 }
 
 /**
@@ -1496,18 +1573,22 @@ export function createAutoPair(win, doc, options = {}) {
         domFallback();
         return;
       }
-      if (wrapSnapshot && isOpen && data === last) {
-        const outcome = wrapCommittedOpenInEditor(editor, last, index.openToClose.get(last), wrapSnapshot);
-        if (outcome.ok) {
-          // 输入法把选中的文字替换成了左半边：还原成「包住原文」
-          stats.wrapped += 1;
-          stats.imeWrapped += 1;
-          stats.viaEditor += 1;
-          note('wrap-ime', last);
-          traceEvent('wrap-ime', last);
-          return;
+      // 输入法把选中的文字替换成了一个符号：不管是左半边还是右半边（中文输入法在已有引号的
+      // 状态下按引号键只给右引号），都用组合开始前记下的原文还原成「包住原文」。
+      if (wrapSnapshot) {
+        const pair = wrapPairFor(index, last);
+        if (pair) {
+          const outcome = wrapCommittedSymbolInEditor(editor, last, pair.open, pair.close, wrapSnapshot);
+          if (outcome.ok) {
+            stats.wrapped += 1;
+            stats.imeWrapped += 1;
+            stats.viaEditor += 1;
+            note('wrap-ime', last);
+            traceEvent('wrap-ime', last);
+            return;
+          }
+          traceEvent('wrap-miss', outcome.reason);
         }
-        traceEvent('wrap-miss', outcome.reason);
       }
       if (isOwnCompletion(root, isOpen ? last : '', closer)) {
         // 重复的 compositionend：右边那个右半边是我们自己刚补的，不是新输入

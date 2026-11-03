@@ -125,11 +125,19 @@ node tools/read-report.mjs "<leveldb 目录>"  # 自定义路径
    所以这里**轮询模型**（最多 12 帧）等它落位，再做判断：刚提交的是左半边还是右半边；
    「我自己补的右半边」用一条带指纹的记录（文本节点 key + 光标位置 + 左右半边 + 时间）来识别，
    避免重复的 `compositionend` 多补一个，也不会把「删掉整对后在原地重打」误判成重复提交。
-   等不到就什么都不做（记 `imeNotSettled`），绝不删输入法刚提交的字符。
+   等不到（或读不到模型光标）就转 DOM 兜底（记 `imeNotSettled` + `ce-nocaret` / `ce-stale`），
+   绝不删输入法刚提交的字符。
 5. **引号单独一条规则**：中文输入法在已开引号后只会给右引号，所以「空的一对中间」要再嵌一对，
    而「已有内容」时仍然是跳过收尾。提交上来的右引号若左边**没有**任何没收尾的左引号
    （光标停在一对已有内容的引号之后就是这样），就把它改写成一对 —— 引号永远成对。括号不受影响。
-6. **幂等 + 可卸载**：`installAutoPair` 会先 `dispose()` 上一份；插件入口用 `ctx.effect`
+6. **有选区时，左半边右半边都包裹**：中文输入法提交符号时浏览器**先删掉选区再插入**，原文在
+   `compositionend` 到达时已经没了 —— 所以 `compositionstart` 先把原文记下来，提交后按「光标左边
+   紧挨着的那个符号」还原成 `open + 原文 + close`。右半边（`”`、`）`）同样处理：`wrapPairFor()`
+   会反查出它的左半边，不会把选中的文字替换成一个孤零零的右引号。
+7. **Ctrl+Z 一次撤干净**：输入法链路上的每次模型层更新都带 `{ tag: ['history-merge'] }`，Lexical 会把
+   它并进「输入法提交」那一条历史记录，撤销一次就把符号与原文整体回退。直接打字走 `beforeinput`，
+   不带这个标签，保留逐步撤销。
+8. **幂等 + 可卸载**：`installAutoPair` 会先 `dispose()` 上一份；插件入口用 `ctx.effect`
    登记清理，停用 / 热重载时监听会被摘掉。
 
 ## 已知边界
@@ -145,7 +153,7 @@ node tools/read-report.mjs "<leveldb 目录>"  # 自定义路径
 
 ```
 src/autopair.mjs        唯一真源：配对表、纯逻辑、Lexical 适配、插件入口 apply(ctx)
-src/autopair.test.mjs   单测（72 个用例：纯逻辑 + 迷你 DOM 全链路 + 假 Lexical 模型层 + 假 textarea）
+src/autopair.test.mjs   单测（80 个用例：纯逻辑 + 迷你 DOM 全链路 + 假 Lexical 模型层 + 假 textarea）
 src/deploy.test.mjs     安装器单测（8 个用例：块摘除 / 路线选择 / 两条路线 / --check / 卸载）
 build.mjs               由 src 生成 lib/client.js（DSH 客户端 bundle 形状）
 deploy.mjs              安装 / 卸载（自动选择 Loader 挂载方式）
@@ -156,7 +164,7 @@ cordis.patch.yml        bundle 式安装用的 Loader 条目声明
 ```
 
 ```bash
-node --test src/autopair.test.mjs src/deploy.test.mjs   # 跑单测（80 个）
+node --test src/autopair.test.mjs src/deploy.test.mjs   # 跑单测（88 个）
 node build.mjs                      # 生成 lib/client.js
 node deploy.mjs                     # 装进 profile
 ```
@@ -177,6 +185,8 @@ DSH 版本理论上都适用。装好后报告里的 `caps.composerReady` 为 `t
 
 | 版本 | 内部修订 | 一句话 |
 | --- | --- | --- |
+| 0.6.1 | v10 | 有选区时按右半边（`”`/`）`）也包住原文；Ctrl+Z 一次撤掉整对符号 |
+| 0.6.0 | v9 | 问答卡片的普通 textarea 也支持配对 |
 | 0.5.3 | v8 | 输入法包裹选区不再比对会被 Lexical 重建的节点身份（0.5.2 在真实编辑器里没生效） |
 | 0.5.2 | v7 | 中文输入法选中文字再按符号，包住原文而不是替换掉 |
 | 0.5.1 | v6 | 修 0.5.0 回归：读不到模型光标时不再「什么都不补」 |

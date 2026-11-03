@@ -18,6 +18,9 @@ import {
   createAutoPair,
   apply,
   currentCaret,
+  readTextSelection,
+  wrapPairFor,
+  openerForClose,
 } from './autopair.mjs';
 import { renderBundle } from '../build.mjs';
 
@@ -491,10 +494,12 @@ function attachFakeEditor(world) {
       this.focus.offset = this.anchor.offset;
     },
   };
+  const tags = [];
   const editor = {
     _editorState: { _selection: selection },
     _pendingEditorState: null,
-    update(run) {
+    update(run, options) {
+      tags.push(options && options.tag ? options.tag : null);
       editor._pendingEditorState = { _selection: selection };
       try {
         run();
@@ -510,7 +515,7 @@ function attachFakeEditor(world) {
     },
   };
   world.root.__lexicalEditor = editor;
-  return { editor, node, selection };
+  return { editor, node, selection, tags };
 }
 
 test('模型层：输入 ( 后光标落在中间，且 DOM 选区跟着模型走', () => {
@@ -1312,4 +1317,135 @@ test('别的 textarea（终端、命令面板）一律不插手', () => {
   assert.equal(event.defaultPrevented, false);
   assert.equal(area.value, '');
   assert.equal(area.inputs.length, 0);
+});
+
+// ------------------------------------------------ 0.6.1：右半边 + 有选区 / Ctrl+Z 只撤一半
+
+test('wrapPairFor：左半边与右半边都能反查出完整的一对', () => {
+  assert.deepEqual(wrapPairFor(index, '（'), { open: '（', close: '）' });
+  assert.deepEqual(wrapPairFor(index, '）'), { open: '（', close: '）' });
+  assert.deepEqual(wrapPairFor(index, '“'), { open: '“', close: '”' });
+  assert.deepEqual(wrapPairFor(index, '”'), { open: '“', close: '”' });
+  assert.deepEqual(wrapPairFor(index, '"'), { open: '"', close: '"' });
+  assert.equal(wrapPairFor(index, 'a'), null);
+  assert.equal(openerForClose(index, '）'), '（');
+  assert.equal(openerForClose(index, '”'), '“');
+  assert.equal(openerForClose(index, 'x'), null);
+});
+
+test('planInsert：有选区时按右半边（中文输入法只给右引号）也要包住原文', () => {
+  const state = { collapsed: false, textSelection: true, text: '网络工程' };
+  assert.deepEqual(planInsert('”', state, index), { kind: 'wrap', open: '“', close: '”' });
+  assert.deepEqual(planInsert('）', state, index), { kind: 'wrap', open: '（', close: '）' });
+  // 选区不是纯文本（含 chip）时不包裹，交给默认行为
+  assert.equal(planInsert('”', { collapsed: false, textSelection: false }, index), null);
+});
+
+test('planFromSelection：非纯文本选区 + 右半边仍然不包裹', () => {
+  const fake = {
+    anchor: { key: 'a', offset: 0, type: 'text', getNode: () => ({ getType: () => 'text' }) },
+    focus: { key: 'a', offset: 2, type: 'text', getNode: () => ({ getType: () => 'text' }) },
+    isCollapsed: () => false,
+    getNodes: () => [{ getType: () => 'decorator' }],
+    getTextContent: () => 'ab',
+  };
+  assert.equal(planFromSelection(fake, '”', index), null);
+});
+
+test('输入法：选中文字后提交右引号 → 包住原文（bug①：不许把原文替换成一个右引号）', () => {
+  const world = createWorld();
+  world.model.push('网', '络', '工', '程');
+  world.selection.anchor = 0;
+  world.selection.focus = 4;
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { data: '' });
+  replaceSelectionByIme(world, fake, '”');
+  world.fire('compositionend', { data: '”' });
+  world.flush();
+
+  const after = world.state();
+  assert.equal(after.text, '“网络工程”', '原文要留在引号里');
+  assert.equal(Math.min(after.anchor, after.caret), 1, '选回原文起点');
+  assert.equal(Math.max(after.anchor, after.caret), 5, '选回原文终点');
+  assert.equal(api.stats.imeWrapped, 1);
+  assert.equal(api.stats.wrapped, 1);
+  assert.equal(api.stats.imePaired, 0, '不能退化成「补一对空引号」');
+});
+
+test('输入法：选中文字后提交右括号 → 包住原文', () => {
+  const world = createWorld();
+  world.model.push('a', 'b');
+  world.selection.anchor = 0;
+  world.selection.focus = 2;
+  const fake = attachFakeEditor(world);
+  const api = installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { data: '' });
+  replaceSelectionByIme(world, fake, '）');
+  world.fire('compositionend', { data: '）' });
+  world.flush();
+
+  assert.equal(world.state().text, '（ab）');
+  assert.equal(api.stats.imeWrapped, 1);
+});
+
+test('输入法：选区跨两个文本节点（Lexical 拆开了）也要包住原文', () => {
+  const world = createWorld();
+  world.model.push('a', 'b', 'c');
+  world.selection.anchor = 0;
+  world.selection.focus = 3;
+  const fake = attachFakeEditor(world);
+  // 模拟 Lexical 把同一段文字拆成两个文本节点：anchor 在 n1、focus 在 n2（同一个段落）
+  const paragraph = { getType: () => 'paragraph' };
+  const nodeB = { __key: 'n2', getType: () => 'text', getParent: () => paragraph };
+  fake.selection.anchor.getNode = () => ({ getType: () => 'text', getParent: () => paragraph });
+  fake.selection.focus.getNode = () => nodeB;
+  fake.selection.anchor.key = 'n1';
+  fake.selection.focus.key = 'n2';
+
+  const snapshot = readTextSelection(world.root);
+  assert.ok(snapshot, '跨节点选区也要能读出原文');
+  assert.equal(snapshot.text, 'abc');
+});
+
+test('Ctrl+Z：输入法补右半边 / 包裹的 update 都打 history-merge（一次撤销整体回退）', () => {
+  const world = createWorld();
+  const fake = attachFakeEditor(world);
+  installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { data: '' });
+  fake.tags.length = 0;
+  imeType(world, fake, '（');
+  world.fire('compositionend', { data: '（' });
+  world.flush();
+  assert.equal(world.state().text, '（）');
+  assert.deepEqual(fake.tags, [['history-merge']], '补右半边必须并进输入法提交那条历史');
+
+  // 直接打字的路径不能打这个标签，否则会把用户连续输入的几步合成一步
+  const world2 = createWorld();
+  const fake2 = attachFakeEditor(world2);
+  installAutoPair(world2.win, world2.doc);
+  world2.fire('beforeinput', { inputType: 'insertText', data: '(' });
+  world2.flush();
+  assert.deepEqual(fake2.tags, [null], '直接输入要留自己的历史条目');
+});
+
+test('Ctrl+Z：输入法包裹原文的 update 也打 history-merge', () => {
+  const world = createWorld();
+  world.model.push('a', 'b');
+  world.selection.anchor = 0;
+  world.selection.focus = 2;
+  const fake = attachFakeEditor(world);
+  installAutoPair(world.win, world.doc);
+
+  world.fire('compositionstart', { data: '' });
+  replaceSelectionByIme(world, fake, '（');
+  fake.tags.length = 0;
+  world.fire('compositionend', { data: '（' });
+  world.flush();
+
+  assert.equal(world.state().text, '（ab）');
+  assert.deepEqual(fake.tags, [['history-merge']]);
 });

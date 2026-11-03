@@ -4,6 +4,31 @@
 All notable changes to this plugin. Package versions map to the internal revisions the same way:
 `0.x.0` ↔ internal `vx`.
 
+## 0.6.1 — 2026-11-03（内部 v10）
+
+**修两个问题：选中文字后按符号「有概率」被替换；Ctrl+Z 只撤掉一边的符号。**
+Fix two bugs: pressing a bracket/quote with text selected sometimes replaced the text instead of
+wrapping it, and Ctrl+Z removed only one of the two symbols.
+
+- bug① 现场证据（报告 trace）：`cs "网络工程"` → `ce "”"` → `pair "”"`。原文捕获成功，但中文输入法
+  在**已有引号**的状态下按引号键，提交的是**右引号 `”`**；包裹分支的条件写死成「提交的是左半边」
+  （`isOpen`），右引号被挡在外面，落到「补一对」那条路上 —— 而原文已经被输入法删掉了，于是表现
+  成「选中的文字被替换」。左括号那种（输入法给 `（`）走得到包裹，所以是「有概率」。
+- 修法：新增 `wrapPairFor(index, ch)` / `openerForClose(index, ch)`，左半边右半边都能反查出完整的一对
+  （`）`→`（`、`”`→`“`）；`wrapCommittedOpenInEditor` 泛化为 `wrapCommittedSymbolInEditor(editor,
+  committed, open, close, snapshot)`；`onCompositionEnd` 的包裹分支改成「只要能配成一对就还原成包裹」；
+  `planInsert` / `planFromSelection` 在「有选区 + 按右半边」时也返回 `wrap`（DOM 兜底路径同样受益）。
+- 顺带修：`readTextSelection` 不再要求 anchor 与 focus 在同一个文本节点、`isTextOnlySelection` 改为比较
+  「顶层块」而不是直接比较父节点 —— Lexical 编辑中会把文本节点拆开重建，旧判据会把跨节点选区误判成
+  「不可包裹」，从而放行浏览器默认的「替换选区」。
+- bug② 根因：中文输入法提交的左半边是**浏览器自己**插的（历史条目 1），我们补的右半边是第二次
+  `editor.update()`（历史条目 2）→ Ctrl+Z 只撤掉右半边，左半边还在。
+- 修法：输入法链路上的所有模型层更新（补右半边、包裹原文、引号再嵌一对、跳过重复右半边）都带
+  `{ tag: ['history-merge'] }`，Lexical 会把它们并进「输入法提交」那一条历史记录 —— 一次 Ctrl+Z 就能
+  把符号与原文整体回退。直接打字（`beforeinput`）的路径**不带**这个标签，保留逐步撤销。
+- 单测 80 → 88（新增：右半边 + 有选区 → 包裹、输入法提交右引号/右括号 → 包裹、跨文本节点选区仍可读
+  出原文、两条 history-merge 断言）。
+
 ## 0.6.0 — 2026-10-27（内部 v9）
 
 **新：DSH 问答卡片里的输入框也支持配对。**
